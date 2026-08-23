@@ -9,7 +9,7 @@ architecture and implementation roadmap are documented in
 
 ## Requirements
 
-- Go 1.26 or newer
+- Go 1.26.3 or newer
 - Git
 - Docker Engine (required by the later integration test suite)
 
