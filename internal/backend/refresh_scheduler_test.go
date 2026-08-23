@@ -14,25 +14,25 @@ type recordingRequester struct {
 }
 
 type scheduledCall struct {
-	scope  backend.RefreshScope
+	key    backend.RefreshKey
 	reason backend.RefreshReason
 }
 
 func (requester *recordingRequester) Refresh(
 	_ context.Context,
-	scope backend.RefreshScope,
+	key backend.RefreshKey,
 	reason backend.RefreshReason,
 ) (backend.RefreshResult, error) {
-	requester.calls <- scheduledCall{scope: scope, reason: reason}
-	return backend.RefreshResult{Scope: scope}, nil
+	requester.calls <- scheduledCall{key: key, reason: reason}
+	return backend.RefreshResult{Key: key}, nil
 }
 
 func TestRefreshSchedulerUsesInjectedClockAndStopsCleanly(t *testing.T) {
 	clock := testkit.NewManualClock(time.Unix(5_000, 0))
-	scope := backend.RefreshScope{Resource: backend.ResourceSystem, View: backend.ViewEngine}
+	key := backend.RefreshKey{Kind: "system.engine"}
 	requester := &recordingRequester{calls: make(chan scheduledCall, 2)}
 	scheduler, err := backend.NewRefreshScheduler(clock, requester, []backend.RefreshPolicy{{
-		Scope: scope, Interval: 10 * time.Second,
+		Key: key, Interval: 10 * time.Second,
 	}})
 	if err != nil {
 		t.Fatalf("new scheduler: %v", err)
@@ -55,7 +55,7 @@ func TestRefreshSchedulerUsesInjectedClockAndStopsCleanly(t *testing.T) {
 	clock.Advance(time.Second)
 	select {
 	case call := <-requester.calls:
-		if call.scope != scope || call.reason != backend.RefreshScheduled {
+		if call.key != key || call.reason != backend.RefreshScheduled {
 			t.Fatalf("scheduled call = %#v", call)
 		}
 	case <-waitCtx.Done():
@@ -76,13 +76,13 @@ func TestRefreshSchedulerUsesInjectedClockAndStopsCleanly(t *testing.T) {
 func TestRefreshSchedulerRejectsInvalidPolicies(t *testing.T) {
 	clock := testkit.NewManualClock(time.Unix(1, 0))
 	requester := &recordingRequester{calls: make(chan scheduledCall, 1)}
-	scope := backend.RefreshScope{Resource: backend.ResourceSystem, View: backend.ViewEngine}
-	if _, err := backend.NewRefreshScheduler(clock, requester, []backend.RefreshPolicy{{Scope: scope}}); !backend.HasErrorCode(err, backend.ErrorInvalidInput) {
+	key := backend.RefreshKey{Kind: "system.engine"}
+	if _, err := backend.NewRefreshScheduler(clock, requester, []backend.RefreshPolicy{{Key: key}}); !backend.HasErrorCode(err, backend.ErrorInvalidInput) {
 		t.Fatalf("zero interval error = %v", err)
 	}
 	if _, err := backend.NewRefreshScheduler(clock, requester, []backend.RefreshPolicy{
-		{Scope: scope, Interval: time.Second},
-		{Scope: scope, Interval: 2 * time.Second},
+		{Key: key, Interval: time.Second},
+		{Key: key, Interval: 2 * time.Second},
 	}); !backend.HasErrorCode(err, backend.ErrorInvalidInput) {
 		t.Fatalf("duplicate scope error = %v", err)
 	}

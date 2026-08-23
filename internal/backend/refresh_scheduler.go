@@ -6,14 +6,14 @@ import (
 	"time"
 )
 
-// RefreshPolicy schedules one shared scope independently of session count.
+// RefreshPolicy schedules one shared refresh independently of session count.
 type RefreshPolicy struct {
-	Scope    RefreshScope
+	Key      RefreshKey
 	Interval time.Duration
 }
 
 type RefreshRequester interface {
-	Refresh(context.Context, RefreshScope, RefreshReason) (RefreshResult, error)
+	Refresh(context.Context, RefreshKey, RefreshReason) (RefreshResult, error)
 }
 
 // RefreshScheduler submits scheduled work through the same coordinator used by
@@ -30,18 +30,18 @@ func NewRefreshScheduler(clock Clock, requester RefreshRequester, policies []Ref
 	if clock == nil || requester == nil {
 		return nil, &AppError{Code: ErrorInvalidInput, Operation: "create refresh scheduler"}
 	}
-	seen := make(map[RefreshScope]struct{}, len(policies))
+	seen := make(map[RefreshKey]struct{}, len(policies))
 	for _, policy := range policies {
-		if err := validateScope(policy.Scope); err != nil {
+		if err := validateRefreshKey(policy.Key); err != nil {
 			return nil, err
 		}
 		if policy.Interval <= 0 {
-			return nil, &AppError{Code: ErrorInvalidInput, Operation: "create refresh scheduler", Resource: policy.Scope.Resource, ID: policy.Scope.ID}
+			return nil, &AppError{Code: ErrorInvalidInput, Operation: "create refresh scheduler", Resource: string(policy.Key.Kind), ID: policy.Key.ID}
 		}
-		if _, exists := seen[policy.Scope]; exists {
-			return nil, &AppError{Code: ErrorInvalidInput, Operation: "create refresh scheduler", Resource: policy.Scope.Resource, ID: policy.Scope.ID}
+		if _, exists := seen[policy.Key]; exists {
+			return nil, &AppError{Code: ErrorInvalidInput, Operation: "create refresh scheduler", Resource: string(policy.Key.Kind), ID: policy.Key.ID}
 		}
-		seen[policy.Scope] = struct{}{}
+		seen[policy.Key] = struct{}{}
 	}
 	return &RefreshScheduler{
 		clock: clock, requester: requester, policies: append([]RefreshPolicy(nil), policies...),
@@ -75,7 +75,7 @@ func (scheduler *RefreshScheduler) Run(ctx context.Context) error {
 				case <-workerContext.Done():
 					return
 				case <-ticker.C():
-					_, _ = scheduler.requester.Refresh(workerContext, policy.Scope, RefreshScheduled)
+					_, _ = scheduler.requester.Refresh(workerContext, policy.Key, RefreshScheduled)
 				}
 			}
 		}()

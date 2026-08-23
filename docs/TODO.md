@@ -6,18 +6,25 @@ TODO list for development
 
 # Backend API
 
-## Slice 0: Shared backend foundation
+## Slice 0: Shared observer-based backend foundation
 
-- [x] Freeze shared snapshot, refresh, event, subscription, stream, job, command-result, and error contracts
-- [x] Remove unrestricted fixture client access and establish the safe helper and cleanup boundary
-- [x] Add deterministic fake clock, scheduler, Docker adapter, and synchronization test utilities
-- [x] Test and implement StateStore versioning, atomicity, unchanged writes, stale state, and concurrent access
-- [x] Test and implement Event Bus filtering, ordering, cancellation, bounded delivery, and overflow behavior
-- [x] Test and implement the Docker event ring buffer and eviction behavior
-- [x] Test and implement RefreshCoordinator coalescing, debounce, failure handling, and event publication
-- [x] Test and implement the refresh scheduler with deterministic time
-- [x] Test and implement application bootstrap and single ownership of shared Docker/Compose dependencies
-- [x] Connect the first production BackendFactory to the conformance suite
+- [x] Replace snapshot contracts with flat refresh keys and typed full-result update events
+- [x] Remove `StateStore`, snapshot versions, stale-cache metadata, and snapshot query methods
+- [x] Implement a separate Event Bus per page with filtering, ordering, bounded delivery, cancellation, and overflow recovery
+- [x] Implement direct RefreshCoordinator loads with page routing, failure publication, cancellation, and no coalescing/debounce state
+- [x] Keep and adapt the deterministic fake clock, scheduler, Docker adapter, and synchronization utilities
+- [x] Keep the bounded recent Docker-event buffer as event history, not resource state
+- [x] Update application bootstrap and preserve single ownership of shared Docker/Compose dependencies
+- [x] Verify two observers on one page receive its authoritative refresh result without cross-page leakage
+- [x] Verify page-lifetime subscriptions, subscribe-before-refresh startup, failure delivery, scheduler behavior, and overflow resync
+- [x] Pass formatting, vet, unit, integration, race, shutdown, ownership, and repeated stability checks
+- [x] Remove the temporary refactor checklist after verification
+
+## Slice 0.5: Docker event ingestion foundation
+
+- [ ] Test and implement one process-wide Docker event listener using the shared Moby client
+- [ ] Normalize, buffer, and publish daemon events without blocking the Docker event stream
+- [ ] Map foundational Docker actions to the affected page refreshes and verify clean cancellation/reconnection
 
 ## Slice 1: Dashboard tab
 
@@ -82,7 +89,7 @@ TODO list for development
 - [ ] Define normalized Docker event DTOs and Events API contracts
 - [ ] Test and implement the recent-events window
 - [ ] Test and implement live filtered event subscriptions
-- [ ] Test normalization and refresh-scope mapping for all supported Docker actions
+- [ ] Complete normalization and refresh mapping for all Docker actions supported by the Events tab
 - [ ] Verify slow subscribers cannot block Docker events or other sessions
 - [ ] Keep pause and clear behavior session-local for the future TUI
 
@@ -93,7 +100,7 @@ TODO list for development
 - [ ] Test and implement the detailed disk-usage window
 - [ ] Test and implement safely scoped container, image, volume, and network prune actions
 - [ ] Test system prune only against an explicitly dedicated Docker daemon
-- [ ] Verify all affected Dashboard and resource snapshots refresh after prune
+- [ ] Verify all affected Dashboard and resource updates are broadcast after prune
 
 ## Final backend quality gates
 

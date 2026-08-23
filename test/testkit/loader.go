@@ -7,27 +7,27 @@ import (
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
 )
 
-// RecordingLoader is a concurrency-safe programmable snapshot loader.
+// RecordingLoader is a concurrency-safe programmable refresh loader.
 type RecordingLoader struct {
 	mu     sync.Mutex
-	Calls  chan backend.RefreshScope
-	LoadFn func(context.Context, backend.RefreshScope) (any, error)
+	Calls  chan backend.RefreshKey
+	LoadFn func(context.Context, backend.RefreshKey) (backend.EventPayload, error)
 	count  int
 }
 
-func NewRecordingLoader(buffer int, load func(context.Context, backend.RefreshScope) (any, error)) *RecordingLoader {
-	return &RecordingLoader{Calls: make(chan backend.RefreshScope, buffer), LoadFn: load}
+func NewRecordingLoader(buffer int, load func(context.Context, backend.RefreshKey) (backend.EventPayload, error)) *RecordingLoader {
+	return &RecordingLoader{Calls: make(chan backend.RefreshKey, buffer), LoadFn: load}
 }
 
-func (loader *RecordingLoader) Load(ctx context.Context, scope backend.RefreshScope) (any, error) {
+func (loader *RecordingLoader) Load(ctx context.Context, key backend.RefreshKey) (backend.EventPayload, error) {
 	loader.mu.Lock()
 	loader.count++
 	loader.mu.Unlock()
 	select {
-	case loader.Calls <- scope:
+	case loader.Calls <- key:
 	default:
 	}
-	return loader.LoadFn(ctx, scope)
+	return loader.LoadFn(ctx, key)
 }
 
 func (loader *RecordingLoader) Count() int {

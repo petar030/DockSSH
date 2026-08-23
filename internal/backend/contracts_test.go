@@ -6,12 +6,32 @@ import (
 	"testing"
 )
 
-func TestRefreshScopeIsComparable(t *testing.T) {
-	scope := RefreshScope{Resource: ResourceContainer, View: ViewSummary}
-	set := map[RefreshScope]struct{}{scope: {}}
+func TestRefreshKeyIsValidAndComparable(t *testing.T) {
+	key := RefreshKey{Kind: "containers.list"}
+	set := map[RefreshKey]struct{}{key: {}}
 
-	if _, ok := set[scope]; !ok {
-		t.Fatal("refresh scope cannot be used as a map key")
+	if !key.Valid() {
+		t.Fatal("named refresh key is invalid")
+	}
+	if _, ok := set[key]; !ok {
+		t.Fatal("refresh key cannot be used as a map key")
+	}
+	if (RefreshKey{}).Valid() {
+		t.Fatal("empty refresh key is valid")
+	}
+}
+
+func TestPageValidation(t *testing.T) {
+	for _, page := range []Page{
+		PageDashboard, PageContainers, PageCompose, PageImages,
+		PageVolumes, PageNetworks, PageEvents, PageSystem,
+	} {
+		if !page.Valid() {
+			t.Fatalf("page %q is invalid", page)
+		}
+	}
+	if Page("unknown").Valid() {
+		t.Fatal("unknown page is valid")
 	}
 }
 

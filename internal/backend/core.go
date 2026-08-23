@@ -5,27 +5,33 @@ import (
 	"errors"
 	"io"
 	"sync"
-	"time"
 )
+
+var allPages = [...]Page{
+	PageDashboard,
+	PageContainers,
+	PageCompose,
+	PageImages,
+	PageVolumes,
+	PageNetworks,
+	PageEvents,
+	PageSystem,
+}
 
 // CoreConfig wires shared backend infrastructure without depending on a
 // concrete Docker client implementation.
 type CoreConfig struct {
 	Clock               Clock
-	Store               *StateStore
-	Events              *EventBus
 	EventBufferCapacity int
 	Loaders             *LoaderRegistry
-	StartupScopes       []RefreshScope
 	RefreshPolicies     []RefreshPolicy
-	DebounceWindow      time.Duration
 	OwnedDockerClient   io.Closer
 }
 
-// Core is the production shared-state backend foundation.
+// Core coordinates refreshes and observations for all sessions. It does not
+// retain Docker resource snapshots.
 type Core struct {
-	store       *StateStore
-	events      *EventBus
+	buses       map[Page]*EventBus
 	eventBuffer *EventBuffer
 	coordinator *RefreshCoordinator
 	scheduler   *RefreshScheduler
@@ -39,43 +45,43 @@ type Core struct {
 	closeErr  error
 }
 
-// NewCore constructs the foundation, performs startup synchronization, and
-// starts the process-wide refresh scheduler.
+// NewCore constructs the shared observer foundation and starts its one refresh
+// scheduler. Sessions subscribe and request their initial data after creation.
 func NewCore(ctx context.Context, config CoreConfig) (*Core, error) {
 	if ctx == nil || config.Loaders == nil {
+		closeOwned(config.OwnedDockerClient)
 		return nil, &AppError{Code: ErrorInvalidInput, Operation: "create core backend"}
+	}
+	if err := ctx.Err(); err != nil {
+		closeOwned(config.OwnedDockerClient)
+		return nil, canceledError("create core backend", RefreshKey{}, err)
 	}
 	if config.Clock == nil {
 		config.Clock = realClock{}
 	}
-	if config.Store == nil {
-		config.Store = NewStateStore()
-	}
-	if config.Events == nil {
-		config.Events = NewEventBus(EventBusConfig{Clock: config.Clock})
+	buses := make(map[Page]*EventBus, len(allPages))
+	for _, page := range allPages {
+		buses[page] = NewEventBus(EventBusConfig{Clock: config.Clock})
 	}
 	coordinator, err := NewRefreshCoordinator(RefreshCoordinatorConfig{
-		Store:          config.Store,
-		Events:         config.Events,
-		Loaders:        config.Loaders,
-		Clock:          config.Clock,
-		DebounceWindow: config.DebounceWindow,
+		Buses:   buses,
+		Loaders: config.Loaders,
 	})
 	if err != nil {
+		closePageBuses(buses)
 		closeOwned(config.OwnedDockerClient)
 		return nil, err
 	}
 	scheduler, err := NewRefreshScheduler(config.Clock, coordinator, config.RefreshPolicies)
 	if err != nil {
 		_ = coordinator.Shutdown(context.Background())
-		_ = config.Events.Close()
+		closePageBuses(buses)
 		closeOwned(config.OwnedDockerClient)
 		return nil, err
 	}
 
 	core := &Core{
-		store:       config.Store,
-		events:      config.Events,
+		buses:       buses,
 		eventBuffer: NewEventBuffer(config.EventBufferCapacity),
 		coordinator: coordinator,
 		scheduler:   scheduler,
@@ -83,51 +89,37 @@ func NewCore(ctx context.Context, config CoreConfig) (*Core, error) {
 		runDone:     make(chan error, 1),
 		closeDone:   make(chan struct{}),
 	}
-	for _, scope := range config.StartupScopes {
-		if _, err := coordinator.Refresh(ctx, scope, RefreshStartup); err != nil {
-			_ = coordinator.Shutdown(context.Background())
-			_ = config.Events.Close()
-			closeOwned(config.OwnedDockerClient)
-			return nil, err
-		}
-	}
-
 	runContext, runCancel := context.WithCancel(context.Background())
 	core.runCancel = runCancel
 	go func() { core.runDone <- scheduler.Run(runContext) }()
 	return core, nil
 }
 
-func (core *Core) Refresh(ctx context.Context, scope RefreshScope, reason RefreshReason) (RefreshResult, error) {
-	return core.coordinator.Refresh(ctx, scope, reason)
+// Refresh performs the complete authoritative refresh configured for one page.
+// TUI sessions do not need to know internal refresh keys or trigger reasons.
+func (core *Core) Refresh(ctx context.Context, page Page) error {
+	return core.coordinator.RefreshPage(ctx, page)
 }
 
-func (core *Core) GetSnapshotVersion(ctx context.Context, scope RefreshScope) (SnapshotMeta, error) {
-	if ctx == nil {
-		return SnapshotMeta{}, &AppError{Code: ErrorInvalidInput, Operation: "get snapshot version", Resource: scope.Resource, ID: scope.ID}
+func (core *Core) Subscribe(ctx context.Context, page Page, filter EventFilter) (Subscription, error) {
+	bus, ok := core.buses[page]
+	if !ok {
+		return nil, &AppError{Code: ErrorInvalidInput, Operation: "subscribe to page", Resource: string(page)}
 	}
-	if err := ctx.Err(); err != nil {
-		return SnapshotMeta{}, canceledError("get snapshot version", scope, err)
-	}
-	return core.store.Meta(scope)
-}
-
-func (core *Core) SubscribeStateChanges(ctx context.Context, filter EventFilter) (Subscription, error) {
-	return core.events.Subscribe(ctx, filter)
+	return bus.Subscribe(ctx, filter)
 }
 
 // ObserveDockerEvent publishes and buffers one already-normalized daemon event.
-func (core *Core) ObserveDockerEvent(event AppEvent) (AppEvent, error) {
-	event.Type = EventDockerObserved
-	published, err := core.events.Publish(event)
+func (core *Core) ObserveDockerEvent(event DockerEventObserved) (EventEnvelope, error) {
+	published, err := core.buses[PageEvents].Publish(EventEnvelope{Reason: RefreshDockerEvent, Payload: event})
 	if err != nil {
-		return AppEvent{}, err
+		return EventEnvelope{}, err
 	}
 	core.eventBuffer.Add(published)
 	return published, nil
 }
 
-func (core *Core) RecentDockerEvents(filter EventFilter, limit int) []AppEvent {
+func (core *Core) RecentDockerEvents(filter EventFilter, limit int) []EventEnvelope {
 	return core.eventBuffer.Recent(filter, limit)
 }
 
@@ -143,7 +135,7 @@ func (core *Core) Close(ctx context.Context) error {
 		defer core.closeMu.Unlock()
 		return core.closeErr
 	case <-ctx.Done():
-		return canceledError("close core backend", RefreshScope{}, ctx.Err())
+		return canceledError("close core backend", RefreshKey{}, ctx.Err())
 	}
 }
 
@@ -151,7 +143,10 @@ func (core *Core) shutdown() {
 	core.runCancel()
 	schedulerErr := <-core.runDone
 	coordinatorErr := core.coordinator.Shutdown(context.Background())
-	eventErr := core.events.Close()
+	var eventErr error
+	for _, page := range allPages {
+		eventErr = errors.Join(eventErr, core.buses[page].Close())
+	}
 	var ownerErr error
 	if core.owner != nil {
 		ownerErr = core.owner.Close()
@@ -165,6 +160,12 @@ func (core *Core) shutdown() {
 func closeOwned(owner io.Closer) {
 	if owner != nil {
 		_ = owner.Close()
+	}
+}
+
+func closePageBuses(buses map[Page]*EventBus) {
+	for _, bus := range buses {
+		_ = bus.Close()
 	}
 }
 

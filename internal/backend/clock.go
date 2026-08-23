@@ -1,8 +1,8 @@
 // This file defines a small adapter boundary around Go's standard time package.
 // It does not maintain an independent clock or store time itself. Production
 // uses realClock, which delegates directly to time.Now and time.NewTicker, while
-// tests can provide a manually controlled Clock to verify scheduling, snapshot
-// timestamps, and debounce behavior without waiting for real time to pass.
+// tests can provide a manually controlled Clock to verify scheduling and event
+// timestamps without waiting for real time to pass.
 package backend
 
 import "time"

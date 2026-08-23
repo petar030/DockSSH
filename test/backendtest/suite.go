@@ -8,9 +8,7 @@ import (
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
 )
 
-// RunCoreConformance executes behavior shared by all backend domains. It is not
-// invoked by this package itself: the production backend's integration test
-// supplies its factory once that implementation exists.
+// RunCoreConformance executes behavior shared by every production backend.
 func RunCoreConformance(t *testing.T, factory BackendFactory, env IntegrationEnvironment) {
 	t.Helper()
 	if factory == nil {
@@ -20,78 +18,81 @@ func RunCoreConformance(t *testing.T, factory BackendFactory, env IntegrationEnv
 		env.Timeout = 30 * time.Second
 	}
 
-	t.Run("startup synchronizes base snapshots", func(t *testing.T) {
+	t.Run("one refresh broadcasts a typed result to two observers", func(t *testing.T) {
 		instance := openBackend(t, factory, env)
-		scope := backend.RefreshScope{
-			Resource: backend.ResourceContainer,
-			View:     backend.ViewSummary,
+		key := backend.RefreshKey{Kind: backend.RefreshKindBackendStatus}
+		filter := backend.EventFilter{
+			Types: []backend.EventType{backend.EventBackendStatusUpdated},
+			Keys:  []backend.RefreshKey{key},
+		}
+
+		first, err := instance.Subscribe(context.Background(), backend.PageSystem, filter)
+		if err != nil {
+			t.Fatalf("subscribe first observer: %v", err)
+		}
+		second, err := instance.Subscribe(context.Background(), backend.PageSystem, filter)
+		if err != nil {
+			t.Fatalf("subscribe second observer: %v", err)
+		}
+		otherPage, err := instance.Subscribe(context.Background(), backend.PageContainers, filter)
+		if err != nil {
+			t.Fatalf("subscribe observer on another page: %v", err)
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), env.Timeout)
 		defer cancel()
-		meta, err := instance.GetSnapshotVersion(ctx, scope)
+		err = instance.Refresh(ctx, backend.PageSystem)
 		if err != nil {
-			t.Fatalf("get startup snapshot metadata: %v", err)
+			t.Fatalf("refresh backend status: %v", err)
 		}
-		if meta.Scope != scope {
-			t.Fatalf("snapshot scope = %#v, want %#v", meta.Scope, scope)
+		firstEvent := receiveEvent(t, ctx, first.Events())
+		secondEvent := receiveEvent(t, ctx, second.Events())
+		for position, event := range []backend.EventEnvelope{firstEvent, secondEvent} {
+			status, ok := event.Payload.(backend.BackendStatusUpdated)
+			if !ok {
+				t.Fatalf("observer %d payload = %T", position+1, event.Payload)
+			}
+			if status.APIVersion == "" {
+				t.Fatalf("observer %d received empty Docker API version", position+1)
+			}
+			if event.Key != key || event.Reason != backend.RefreshManual || event.Sequence == 0 {
+				t.Fatalf("observer %d event = %#v", position+1, event)
+			}
 		}
-		if meta.Version == 0 {
-			t.Fatal("startup snapshot version must be non-zero")
+		select {
+		case event := <-otherPage.Events():
+			t.Fatalf("System update leaked to Containers page: %#v", event)
+		default:
 		}
-		if meta.RefreshedAt.IsZero() {
-			t.Fatal("startup snapshot has no refresh time")
+
+		if err := first.Close(); err != nil {
+			t.Fatalf("close first observer: %v", err)
 		}
-		if meta.Stale {
-			t.Fatal("successful startup snapshot is stale")
+		if err := instance.Refresh(ctx, backend.PageSystem); err != nil {
+			t.Fatalf("refresh after first observer closed: %v", err)
+		}
+		if event := receiveEvent(t, ctx, second.Events()); event.Payload.EventType() != backend.EventBackendStatusUpdated {
+			t.Fatalf("remaining observer event = %#v", event)
 		}
 	})
 
-	t.Run("manual refresh returns coherent metadata", func(t *testing.T) {
-		instance := openBackend(t, factory, env)
-		scope := backend.RefreshScope{
-			Resource: backend.ResourceContainer,
-			View:     backend.ViewSummary,
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), env.Timeout)
-		defer cancel()
-		before, err := instance.GetSnapshotVersion(ctx, scope)
-		if err != nil {
-			t.Fatalf("get metadata before refresh: %v", err)
-		}
-		result, err := instance.Refresh(ctx, scope, backend.RefreshManual)
-		if err != nil {
-			t.Fatalf("manual refresh: %v", err)
-		}
-		if result.Scope != scope {
-			t.Fatalf("result scope = %#v, want %#v", result.Scope, scope)
-		}
-		if result.Version < before.Version {
-			t.Fatalf("snapshot version regressed from %d to %d", before.Version, result.Version)
-		}
-		if result.RefreshedAt.IsZero() {
-			t.Fatal("refresh result has no refresh time")
-		}
-	})
-
-	t.Run("subscription context cancellation closes events", func(t *testing.T) {
+	t.Run("subscription cancellation closes only that observer", func(t *testing.T) {
 		instance := openBackend(t, factory, env)
 		subscriptionContext, cancelSubscription := context.WithCancel(context.Background())
-		subscription, err := instance.SubscribeStateChanges(subscriptionContext, backend.EventFilter{})
+		subscription, err := instance.Subscribe(subscriptionContext, backend.PageSystem, backend.EventFilter{})
 		if err != nil {
 			t.Fatalf("subscribe: %v", err)
 		}
 		cancelSubscription()
 
-		timer := time.NewTimer(env.Timeout)
-		defer timer.Stop()
+		ctx, cancel := context.WithTimeout(context.Background(), env.Timeout)
+		defer cancel()
 		select {
 		case _, open := <-subscription.Events():
 			if open {
 				t.Fatal("subscription delivered an event after cancellation")
 			}
-		case <-timer.C:
+		case <-ctx.Done():
 			t.Fatal("subscription channel remained open after cancellation")
 		}
 
@@ -99,6 +100,20 @@ func RunCoreConformance(t *testing.T, factory BackendFactory, env IntegrationEnv
 			t.Fatalf("idempotent subscription close: %v", err)
 		}
 	})
+}
+
+func receiveEvent(t *testing.T, ctx context.Context, events <-chan backend.EventEnvelope) backend.EventEnvelope {
+	t.Helper()
+	select {
+	case event, open := <-events:
+		if !open {
+			t.Fatal("subscription closed before delivering an event")
+		}
+		return event
+	case <-ctx.Done():
+		t.Fatalf("wait for event: %v", ctx.Err())
+		return backend.EventEnvelope{}
+	}
 }
 
 func openBackend(t *testing.T, factory BackendFactory, env IntegrationEnvironment) backend.Backend {

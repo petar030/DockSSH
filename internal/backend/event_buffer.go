@@ -5,7 +5,7 @@ import "sync"
 // EventBuffer is a bounded process-local ring of normalized Docker events.
 type EventBuffer struct {
 	mu      sync.RWMutex
-	entries []AppEvent
+	entries []EventEnvelope
 	start   int
 	length  int
 }
@@ -14,15 +14,15 @@ func NewEventBuffer(capacity int) *EventBuffer {
 	if capacity < 0 {
 		capacity = 0
 	}
-	return &EventBuffer{entries: make([]AppEvent, capacity)}
+	return &EventBuffer{entries: make([]EventEnvelope, capacity)}
 }
 
 // Add records DockerEventObserved notifications only.
-func (buffer *EventBuffer) Add(event AppEvent) bool {
-	if event.Type != EventDockerObserved || len(buffer.entries) == 0 {
+func (buffer *EventBuffer) Add(event EventEnvelope) bool {
+	if event.Payload == nil || event.Payload.EventType() != EventDockerObserved || len(buffer.entries) == 0 {
 		return false
 	}
-	event.Attributes = cloneAttributes(event.Attributes)
+	event = cloneEnvelope(event)
 	buffer.mu.Lock()
 	defer buffer.mu.Unlock()
 	if buffer.length < len(buffer.entries) {
@@ -38,19 +38,18 @@ func (buffer *EventBuffer) Add(event AppEvent) bool {
 
 // Recent returns newest-first copied events matching filter. A non-positive
 // limit returns every matching event retained by the buffer.
-func (buffer *EventBuffer) Recent(filter EventFilter, limit int) []AppEvent {
+func (buffer *EventBuffer) Recent(filter EventFilter, limit int) []EventEnvelope {
 	buffer.mu.RLock()
 	defer buffer.mu.RUnlock()
 	if limit <= 0 || limit > buffer.length {
 		limit = buffer.length
 	}
-	result := make([]AppEvent, 0, limit)
+	result := make([]EventEnvelope, 0, limit)
 	for offset := buffer.length - 1; offset >= 0 && len(result) < limit; offset-- {
 		index := (buffer.start + offset) % len(buffer.entries)
 		event := buffer.entries[index]
 		if matchesEvent(filter, event) {
-			event.Attributes = cloneAttributes(event.Attributes)
-			result = append(result, event)
+			result = append(result, cloneEnvelope(event))
 		}
 	}
 	return result

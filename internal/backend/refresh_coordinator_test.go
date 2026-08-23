@@ -3,189 +3,155 @@ package backend
 import (
 	"context"
 	"errors"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
 )
 
-func TestRefreshCoordinatorStoresChangesAndPublishesOnlyChangedSnapshots(t *testing.T) {
-	clock := newCoordinatorClock(time.Unix(1_000, 0))
-	scope := RefreshScope{Resource: ResourceContainer, View: ViewSummary}
-	loader := newCoordinatorLoader(func(context.Context, RefreshScope) (any, error) {
-		return map[string]int{"containers": 1}, nil
+func TestRefreshCoordinatorLoadsEveryRequestAndPublishesOnlyToItsPage(t *testing.T) {
+	key := RefreshKey{Kind: RefreshKindBackendStatus}
+	loader := newCoordinatorLoader(func(context.Context, RefreshKey) (EventPayload, error) {
+		return BackendStatusUpdated{APIVersion: "1.48"}, nil
 	})
-	coordinator, store, bus := newTestCoordinator(t, clock, scope, loader, 0)
-	subscription, err := bus.Subscribe(context.Background(), EventFilter{Types: []EventType{EventSnapshotUpdated}})
+	coordinator, buses := newTestCoordinator(t, PageSystem, key.Kind, loader)
+	systemSubscription, err := buses[PageSystem].Subscribe(context.Background(), EventFilter{})
 	if err != nil {
-		t.Fatalf("subscribe: %v", err)
+		t.Fatalf("subscribe to System: %v", err)
+	}
+	otherSubscription, err := buses[PageContainers].Subscribe(context.Background(), EventFilter{})
+	if err != nil {
+		t.Fatalf("subscribe to Containers: %v", err)
 	}
 
-	first, err := coordinator.Refresh(context.Background(), scope, RefreshStartup)
-	if err != nil {
-		t.Fatalf("first refresh: %v", err)
+	for index := 0; index < 2; index++ {
+		result, err := coordinator.Refresh(context.Background(), key, RefreshManual)
+		if err != nil {
+			t.Fatalf("refresh %d: %v", index+1, err)
+		}
+		event := <-systemSubscription.Events()
+		if event.Sequence != result.Sequence || event.Key != key {
+			t.Fatalf("refresh %d result/event = %#v / %#v", index+1, result, event)
+		}
 	}
-	if first.Version != 1 || !first.Changed {
-		t.Fatalf("first refresh result = %#v", first)
-	}
-	event := <-subscription.Events()
-	if event.Type != EventSnapshotUpdated || event.SnapshotVersion != 1 || event.RefreshReason != RefreshStartup {
-		t.Fatalf("snapshot event = %#v", event)
-	}
-
-	clock.Advance(time.Second)
-	second, err := coordinator.Refresh(context.Background(), scope, RefreshManual)
-	if err != nil {
-		t.Fatalf("unchanged refresh: %v", err)
-	}
-	if second.Version != 1 || second.Changed {
-		t.Fatalf("unchanged result = %#v", second)
+	if loader.Count() != 2 {
+		t.Fatalf("loader calls = %d, want 2", loader.Count())
 	}
 	select {
-	case unexpected := <-subscription.Events():
-		t.Fatalf("unchanged refresh published %#v", unexpected)
+	case event := <-otherSubscription.Events():
+		t.Fatalf("System update leaked to Containers bus: %#v", event)
 	default:
-	}
-	meta, err := store.Meta(scope)
-	if err != nil || meta.RefreshedAt != clock.Now() || meta.Reason != RefreshManual {
-		t.Fatalf("updated metadata = %#v, %v", meta, err)
 	}
 }
 
-func TestRefreshCoordinatorFailurePreservesSnapshotAndPublishesFailure(t *testing.T) {
-	clock := newCoordinatorClock(time.Unix(2_000, 0))
-	scope := RefreshScope{Resource: ResourceImage, View: ViewSummary}
-	var mu sync.Mutex
-	fail := false
-	loader := newCoordinatorLoader(func(context.Context, RefreshScope) (any, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		if fail {
-			return nil, errors.New("daemon disappeared")
-		}
-		return []string{"image"}, nil
+func TestRefreshCoordinatorPublishesFailureOnlyToItsPage(t *testing.T) {
+	key := RefreshKey{Kind: "images.list"}
+	loader := newCoordinatorLoader(func(context.Context, RefreshKey) (EventPayload, error) {
+		return nil, errors.New("daemon disappeared")
 	})
-	coordinator, store, bus := newTestCoordinator(t, clock, scope, loader, 0)
-	if _, err := coordinator.Refresh(context.Background(), scope, RefreshStartup); err != nil {
-		t.Fatalf("initial refresh: %v", err)
-	}
-	subscription, err := bus.Subscribe(context.Background(), EventFilter{Types: []EventType{EventRefreshFailed}})
+	coordinator, buses := newTestCoordinator(t, PageImages, key.Kind, loader)
+	subscription, err := buses[PageImages].Subscribe(context.Background(), EventFilter{Types: []EventType{EventRefreshFailed}})
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
-	mu.Lock()
-	fail = true
-	mu.Unlock()
 
-	if _, err := coordinator.Refresh(context.Background(), scope, RefreshManual); !HasErrorCode(err, ErrorInternal) {
+	if _, err := coordinator.Refresh(context.Background(), key, RefreshManual); !HasErrorCode(err, ErrorInternal) {
 		t.Fatalf("refresh failure = %v", err)
 	}
-	meta, err := store.Meta(scope)
-	if err != nil {
-		t.Fatalf("metadata after failure: %v", err)
-	}
-	if !meta.Stale || meta.Version != 1 {
-		t.Fatalf("metadata after failure = %#v", meta)
-	}
-	if _, err := store.Read(scope); err != nil {
-		t.Fatalf("last valid snapshot was lost: %v", err)
-	}
 	event := <-subscription.Events()
-	if event.Type != EventRefreshFailed || event.Attributes["error"] == "" {
+	failure, ok := event.Payload.(RefreshFailed)
+	if !ok || failure.Err == nil || event.Key != key {
 		t.Fatalf("failure event = %#v", event)
 	}
 }
 
-func TestRefreshCoordinatorCoalescesConcurrentIdenticalScopes(t *testing.T) {
-	clock := newCoordinatorClock(time.Unix(3_000, 0))
-	scope := RefreshScope{Resource: ResourceNetwork, View: ViewSummary}
-	gate := newCoordinatorGate()
-	loader := newCoordinatorLoader(func(ctx context.Context, _ RefreshScope) (any, error) {
-		if err := gate.Block(ctx); err != nil {
-			return nil, err
+func TestRefreshCoordinatorDoesNotCoalesceIdenticalConcurrentRequests(t *testing.T) {
+	key := RefreshKey{Kind: "containers.list"}
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	loader := newCoordinatorLoader(func(ctx context.Context, _ RefreshKey) (EventPayload, error) {
+		started <- struct{}{}
+		select {
+		case <-release:
+			return BackendStatusUpdated{}, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
-		return []string{"network"}, nil
 	})
-	coordinator, _, _ := newTestCoordinator(t, clock, scope, loader, 0)
+	coordinator, _ := newTestCoordinator(t, PageContainers, key.Kind, loader)
 
-	type outcome struct {
-		result RefreshResult
-		err    error
+	done := make(chan error, 2)
+	for range 2 {
+		go func() {
+			_, err := coordinator.Refresh(context.Background(), key, RefreshManual)
+			done <- err
+		}()
 	}
-	firstDone := make(chan outcome, 1)
-	go func() {
-		result, err := coordinator.Refresh(context.Background(), scope, RefreshManual)
-		firstDone <- outcome{result: result, err: err}
-	}()
-	<-gate.Started
-	secondDone := make(chan outcome, 1)
-	go func() {
-		result, err := coordinator.Refresh(context.Background(), scope, RefreshManual)
-		secondDone <- outcome{result: result, err: err}
-	}()
-	waitForRefreshWaiters(t, coordinator, scope, 1)
-	gate.Release()
-
-	first := <-firstDone
-	second := <-secondDone
-	if first.err != nil || second.err != nil {
-		t.Fatalf("coalesced outcomes: first=%v second=%v", first.err, second.err)
+	waitContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	for range 2 {
+		select {
+		case <-started:
+		case <-waitContext.Done():
+			t.Fatal("an identical refresh waited for another request")
+		}
 	}
-	if first.result.Coalesced {
-		t.Fatal("owner refresh was marked coalesced")
+	close(release)
+	for range 2 {
+		if err := <-done; err != nil {
+			t.Fatalf("refresh: %v", err)
+		}
 	}
-	if !second.result.Coalesced {
-		t.Fatal("waiting refresh was not marked coalesced")
-	}
-	if loader.Count() != 1 {
-		t.Fatalf("loader calls = %d, want 1", loader.Count())
+	if loader.Count() != 2 {
+		t.Fatalf("loader calls = %d, want 2", loader.Count())
 	}
 }
 
-func TestRefreshCoordinatorDebouncesCommandAndDockerEventPair(t *testing.T) {
-	clock := newCoordinatorClock(time.Unix(4_000, 0))
-	scope := RefreshScope{Resource: ResourceVolume, View: ViewSummary}
-	loader := newCoordinatorLoader(func(context.Context, RefreshScope) (any, error) {
-		return []string{"volume"}, nil
+func TestRefreshCoordinatorCallerCancellationCancelsItsLoadWithoutFailureEvent(t *testing.T) {
+	key := RefreshKey{Kind: "volumes.list"}
+	started := make(chan struct{})
+	loader := newCoordinatorLoader(func(ctx context.Context, _ RefreshKey) (EventPayload, error) {
+		close(started)
+		<-ctx.Done()
+		return nil, ctx.Err()
 	})
-	coordinator, _, _ := newTestCoordinator(t, clock, scope, loader, 2*time.Second)
-
-	if _, err := coordinator.Refresh(context.Background(), scope, RefreshCommand); err != nil {
-		t.Fatalf("command refresh: %v", err)
-	}
-	result, err := coordinator.Refresh(context.Background(), scope, RefreshDockerEvent)
+	coordinator, buses := newTestCoordinator(t, PageVolumes, key.Kind, loader)
+	failures, err := buses[PageVolumes].Subscribe(context.Background(), EventFilter{Types: []EventType{EventRefreshFailed}})
 	if err != nil {
-		t.Fatalf("debounced event refresh: %v", err)
+		t.Fatalf("subscribe: %v", err)
 	}
-	if !result.Coalesced || loader.Count() != 1 {
-		t.Fatalf("debounced result=%#v loader calls=%d", result, loader.Count())
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := coordinator.Refresh(ctx, key, RefreshManual)
+		done <- err
+	}()
+	<-started
+	cancel()
+	if err := <-done; !HasErrorCode(err, ErrorCanceled) {
+		t.Fatalf("canceled refresh error = %v", err)
 	}
-	clock.Advance(3 * time.Second)
-	if _, err := coordinator.Refresh(context.Background(), scope, RefreshDockerEvent); err != nil {
-		t.Fatalf("event after debounce: %v", err)
-	}
-	if loader.Count() != 2 {
-		t.Fatalf("loader calls after window = %d, want 2", loader.Count())
+	select {
+	case event := <-failures.Events():
+		t.Fatalf("caller cancellation was broadcast as a failure: %#v", event)
+	default:
 	}
 }
 
 func TestRefreshCoordinatorShutdownCancelsActiveLoaders(t *testing.T) {
-	clock := newCoordinatorClock(time.Unix(4_500, 0))
-	scope := RefreshScope{Resource: ResourceSystem, View: ViewEngine}
-	gate := newCoordinatorGate()
-	loader := newCoordinatorLoader(func(ctx context.Context, _ RefreshScope) (any, error) {
-		if err := gate.Block(ctx); err != nil {
-			return nil, err
-		}
-		return nil, nil
+	key := RefreshKey{Kind: "system.engine"}
+	started := make(chan struct{})
+	loader := newCoordinatorLoader(func(ctx context.Context, _ RefreshKey) (EventPayload, error) {
+		close(started)
+		<-ctx.Done()
+		return nil, ctx.Err()
 	})
-	coordinator, _, _ := newTestCoordinator(t, clock, scope, loader, 0)
+	coordinator, _ := newTestCoordinator(t, PageSystem, key.Kind, loader)
 	refreshDone := make(chan error, 1)
 	go func() {
-		_, err := coordinator.Refresh(context.Background(), scope, RefreshManual)
+		_, err := coordinator.Refresh(context.Background(), key, RefreshManual)
 		refreshDone <- err
 	}()
-	<-gate.Started
+	<-started
 
 	if err := coordinator.Shutdown(context.Background()); err != nil {
 		t.Fatalf("shutdown: %v", err)
@@ -193,51 +159,26 @@ func TestRefreshCoordinatorShutdownCancelsActiveLoaders(t *testing.T) {
 	if err := <-refreshDone; !HasErrorCode(err, ErrorCanceled) {
 		t.Fatalf("active refresh error = %v", err)
 	}
-	if _, err := coordinator.Refresh(context.Background(), scope, RefreshManual); !HasErrorCode(err, ErrorStreamClosed) {
+	if _, err := coordinator.Refresh(context.Background(), key, RefreshManual); !HasErrorCode(err, ErrorStreamClosed) {
 		t.Fatalf("refresh after shutdown error = %v", err)
 	}
-}
-
-type coordinatorClock struct {
-	mu  sync.Mutex
-	now time.Time
-}
-
-func newCoordinatorClock(now time.Time) *coordinatorClock {
-	return &coordinatorClock{now: now}
-}
-
-func (clock *coordinatorClock) Now() time.Time {
-	clock.mu.Lock()
-	defer clock.mu.Unlock()
-	return clock.now
-}
-
-func (clock *coordinatorClock) Advance(duration time.Duration) {
-	clock.mu.Lock()
-	clock.now = clock.now.Add(duration)
-	clock.mu.Unlock()
-}
-
-func (*coordinatorClock) NewTicker(time.Duration) Ticker {
-	panic("coordinator test clock does not create tickers")
 }
 
 type coordinatorLoader struct {
 	mu     sync.Mutex
 	count  int
-	loadFn func(context.Context, RefreshScope) (any, error)
+	loadFn func(context.Context, RefreshKey) (EventPayload, error)
 }
 
-func newCoordinatorLoader(loadFn func(context.Context, RefreshScope) (any, error)) *coordinatorLoader {
+func newCoordinatorLoader(loadFn func(context.Context, RefreshKey) (EventPayload, error)) *coordinatorLoader {
 	return &coordinatorLoader{loadFn: loadFn}
 }
 
-func (loader *coordinatorLoader) Load(ctx context.Context, scope RefreshScope) (any, error) {
+func (loader *coordinatorLoader) Load(ctx context.Context, key RefreshKey) (EventPayload, error) {
 	loader.mu.Lock()
 	loader.count++
 	loader.mu.Unlock()
-	return loader.loadFn(ctx, scope)
+	return loader.loadFn(ctx, key)
 }
 
 func (loader *coordinatorLoader) Count() int {
@@ -246,72 +187,32 @@ func (loader *coordinatorLoader) Count() int {
 	return loader.count
 }
 
-type coordinatorGate struct {
-	Started chan struct{}
-	release chan struct{}
-	start   sync.Once
-	done    sync.Once
-}
-
-func newCoordinatorGate() *coordinatorGate {
-	return &coordinatorGate{Started: make(chan struct{}), release: make(chan struct{})}
-}
-
-func (gate *coordinatorGate) Block(ctx context.Context) error {
-	gate.start.Do(func() { close(gate.Started) })
-	select {
-	case <-gate.release:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (gate *coordinatorGate) Release() {
-	gate.done.Do(func() { close(gate.release) })
-}
-
 func newTestCoordinator(
 	t *testing.T,
-	clock Clock,
-	scope RefreshScope,
-	loader SnapshotLoader,
-	debounce time.Duration,
-) (*RefreshCoordinator, *StateStore, *EventBus) {
+	page Page,
+	kind RefreshKind,
+	loader RefreshLoader,
+) (*RefreshCoordinator, map[Page]*EventBus) {
 	t.Helper()
-	store := NewStateStore()
-	bus := NewEventBus(EventBusConfig{Clock: clock, SubscriberBuffer: 8})
+	buses := map[Page]*EventBus{
+		PageContainers: NewEventBus(EventBusConfig{SubscriberBuffer: 8}),
+		PageImages:     NewEventBus(EventBusConfig{SubscriberBuffer: 8}),
+		PageVolumes:    NewEventBus(EventBusConfig{SubscriberBuffer: 8}),
+		PageSystem:     NewEventBus(EventBusConfig{SubscriberBuffer: 8}),
+	}
 	registry := NewLoaderRegistry()
-	if err := registry.Register(scope, loader); err != nil {
+	if err := registry.Register(page, kind, loader); err != nil {
 		t.Fatalf("register loader: %v", err)
 	}
-	coordinator, err := NewRefreshCoordinator(RefreshCoordinatorConfig{
-		Store: store, Events: bus, Loaders: registry, Clock: clock, DebounceWindow: debounce,
-	})
+	coordinator, err := NewRefreshCoordinator(RefreshCoordinatorConfig{Buses: buses, Loaders: registry})
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)
 	}
 	t.Cleanup(func() {
 		_ = coordinator.Shutdown(context.Background())
-		_ = bus.Close()
+		for _, bus := range buses {
+			_ = bus.Close()
+		}
 	})
-	return coordinator, store, bus
-}
-
-func waitForRefreshWaiters(t *testing.T, coordinator *RefreshCoordinator, scope RefreshScope, count int) {
-	t.Helper()
-	for attempts := 0; attempts < 100_000; attempts++ {
-		coordinator.mu.Lock()
-		call := coordinator.active[scope]
-		waiters := 0
-		if call != nil {
-			waiters = call.waiters
-		}
-		coordinator.mu.Unlock()
-		if waiters >= count {
-			return
-		}
-		runtime.Gosched()
-	}
-	t.Fatal("coalesced refresh did not register a waiter")
+	return coordinator, buses
 }

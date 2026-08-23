@@ -2,7 +2,6 @@ package backend
 
 import (
 	"context"
-	"strconv"
 	"sync"
 )
 
@@ -41,18 +40,22 @@ func NewEventBus(config EventBusConfig) *EventBus {
 
 // Publish assigns process-local sequence and time values, then offers the
 // event to every matching subscriber without blocking.
-func (bus *EventBus) Publish(event AppEvent) (AppEvent, error) {
+func (bus *EventBus) Publish(event EventEnvelope) (EventEnvelope, error) {
+	if event.Payload == nil || event.Payload.EventType() == "" {
+		return EventEnvelope{}, &AppError{Code: ErrorInvalidInput, Operation: "publish event"}
+	}
+
 	bus.mu.Lock()
 	if bus.closed {
 		bus.mu.Unlock()
-		return AppEvent{}, &AppError{Code: ErrorStreamClosed, Operation: "publish event"}
+		return EventEnvelope{}, &AppError{Code: ErrorStreamClosed, Operation: "publish event"}
 	}
 	bus.nextSequence++
 	event.Sequence = bus.nextSequence
 	if event.Time.IsZero() {
 		event.Time = bus.clock.Now()
 	}
-	event.Attributes = cloneAttributes(event.Attributes)
+	event = cloneEnvelope(event)
 	for _, subscription := range bus.subscribers {
 		if matchesEvent(subscription.filter, event) {
 			subscription.deliver(event)
@@ -65,7 +68,7 @@ func (bus *EventBus) Publish(event AppEvent) (AppEvent, error) {
 // Subscribe registers an independent bounded subscription.
 func (bus *EventBus) Subscribe(ctx context.Context, filter EventFilter) (Subscription, error) {
 	if ctx == nil {
-		return nil, &AppError{Code: ErrorInvalidInput, Operation: "subscribe", Err: context.Canceled}
+		return nil, &AppError{Code: ErrorInvalidInput, Operation: "subscribe"}
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, &AppError{Code: ErrorCanceled, Operation: "subscribe", Err: err}
@@ -81,7 +84,7 @@ func (bus *EventBus) Subscribe(ctx context.Context, filter EventFilter) (Subscri
 		id:     bus.nextSubscriberID,
 		bus:    bus,
 		filter: cloneFilter(filter),
-		events: make(chan AppEvent, bus.bufferSize),
+		events: make(chan EventEnvelope, bus.bufferSize),
 		done:   make(chan struct{}),
 	}
 	bus.subscribers[subscription.id] = subscription
@@ -128,13 +131,13 @@ type eventSubscription struct {
 	id        uint64
 	bus       *EventBus
 	filter    EventFilter
-	events    chan AppEvent
+	events    chan EventEnvelope
 	done      chan struct{}
 	mu        sync.Mutex
 	closeOnce sync.Once
 }
 
-func (subscription *eventSubscription) Events() <-chan AppEvent {
+func (subscription *eventSubscription) Events() <-chan EventEnvelope {
 	return subscription.events
 }
 
@@ -148,18 +151,17 @@ func (subscription *eventSubscription) Close() error {
 
 func (subscription *eventSubscription) closeChannel() {
 	subscription.mu.Lock()
+	defer subscription.mu.Unlock()
 	select {
 	case <-subscription.done:
-		subscription.mu.Unlock()
 		return
 	default:
 		close(subscription.done)
 		close(subscription.events)
-		subscription.mu.Unlock()
 	}
 }
 
-func (subscription *eventSubscription) deliver(event AppEvent) {
+func (subscription *eventSubscription) deliver(event EventEnvelope) {
 	subscription.mu.Lock()
 	defer subscription.mu.Unlock()
 	select {
@@ -168,26 +170,24 @@ func (subscription *eventSubscription) deliver(event AppEvent) {
 	default:
 	}
 
-	event.Attributes = cloneAttributes(event.Attributes)
 	select {
-	case subscription.events <- event:
+	case subscription.events <- cloneEnvelope(event):
 		return
 	default:
 	}
 
-	// Make the overflow observable without blocking the publisher. The oldest
-	// pending notification is discarded and replaced by a recovery signal.
+	// Drop the oldest queued event and retain an explicit recovery signal. A
+	// slow observer can keep this subscription and request a fresh visible view.
 	select {
 	case <-subscription.events:
 	default:
 	}
-	overflow := AppEvent{
+	overflow := EventEnvelope{
 		Sequence: event.Sequence,
-		Type:     EventOverflow,
 		Time:     event.Time,
-		Attributes: map[string]string{
-			"dropped_sequence": strconv.FormatUint(event.Sequence, 10),
-		},
+		Key:      event.Key,
+		Reason:   event.Reason,
+		Payload:  SubscriberOverflow{DroppedSequence: event.Sequence},
 	}
 	select {
 	case subscription.events <- overflow:
@@ -195,32 +195,11 @@ func (subscription *eventSubscription) deliver(event AppEvent) {
 	}
 }
 
-func matchesEvent(filter EventFilter, event AppEvent) bool {
-	if event.Type == EventOverflow {
+func matchesEvent(filter EventFilter, event EventEnvelope) bool {
+	if event.Payload.EventType() == EventSubscriberOverflow {
 		return true
 	}
-	if !contains(filter.Types, event.Type) || !contains(filter.ResourceTypes, event.ResourceType) {
-		return false
-	}
-	if filter.ResourceID != "" && filter.ResourceID != event.ResourceID {
-		return false
-	}
-	if filter.Project != "" && filter.Project != event.Project {
-		return false
-	}
-	if len(filter.Scopes) > 0 {
-		matched := false
-		for _, scope := range filter.Scopes {
-			if scope == event.Scope {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return false
-		}
-	}
-	return true
+	return contains(filter.Types, event.Payload.EventType()) && contains(filter.Keys, event.Key)
 }
 
 func contains[T comparable](allowed []T, value T) bool {
@@ -237,9 +216,23 @@ func contains[T comparable](allowed []T, value T) bool {
 
 func cloneFilter(filter EventFilter) EventFilter {
 	filter.Types = append([]EventType(nil), filter.Types...)
-	filter.ResourceTypes = append([]ResourceType(nil), filter.ResourceTypes...)
-	filter.Scopes = append([]RefreshScope(nil), filter.Scopes...)
+	filter.Keys = append([]RefreshKey(nil), filter.Keys...)
 	return filter
+}
+
+func cloneEnvelope(event EventEnvelope) EventEnvelope {
+	switch payload := event.Payload.(type) {
+	case DockerEventObserved:
+		payload.Attributes = cloneAttributes(payload.Attributes)
+		event.Payload = payload
+	case *DockerEventObserved:
+		if payload != nil {
+			copy := *payload
+			copy.Attributes = cloneAttributes(payload.Attributes)
+			event.Payload = &copy
+		}
+	}
+	return event
 }
 
 func cloneAttributes(attributes map[string]string) map[string]string {

@@ -9,24 +9,23 @@ import (
 type ErrorCode string
 
 const (
-	ErrorInvalidInput        ErrorCode = "invalid_input"
-	ErrorNotFound            ErrorCode = "not_found"
-	ErrorConflict            ErrorCode = "conflict"
-	ErrorPermissionDenied    ErrorCode = "permission_denied"
-	ErrorDaemonUnavailable   ErrorCode = "daemon_unavailable"
-	ErrorTimeout             ErrorCode = "timeout"
-	ErrorCanceled            ErrorCode = "canceled"
-	ErrorSnapshotUnavailable ErrorCode = "snapshot_unavailable"
-	ErrorStreamClosed        ErrorCode = "stream_closed"
-	ErrorUnsupported         ErrorCode = "unsupported"
-	ErrorInternal            ErrorCode = "internal"
+	ErrorInvalidInput      ErrorCode = "invalid_input"
+	ErrorNotFound          ErrorCode = "not_found"
+	ErrorConflict          ErrorCode = "conflict"
+	ErrorPermissionDenied  ErrorCode = "permission_denied"
+	ErrorDaemonUnavailable ErrorCode = "daemon_unavailable"
+	ErrorTimeout           ErrorCode = "timeout"
+	ErrorCanceled          ErrorCode = "canceled"
+	ErrorStreamClosed      ErrorCode = "stream_closed"
+	ErrorUnsupported       ErrorCode = "unsupported"
+	ErrorInternal          ErrorCode = "internal"
 )
 
 // AppError wraps an implementation-specific error with a stable category.
 type AppError struct {
 	Code      ErrorCode
 	Operation string
-	Resource  ResourceType
+	Resource  string
 	ID        string
 	Err       error
 }

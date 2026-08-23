@@ -5,8 +5,6 @@ package docker
 import (
 	"context"
 	"fmt"
-	"sort"
-	"time"
 
 	"github.com/docker/cli/cli/command"
 	cliflags "github.com/docker/cli/cli/flags"
@@ -68,7 +66,6 @@ type EngineEvent = events.Message
 type BackendConfig struct {
 	Endpoint            string
 	Clock               backend.Clock
-	DebounceWindow      time.Duration
 	EventBufferCapacity int
 	RefreshPolicies     []backend.RefreshPolicy
 }
@@ -79,36 +76,26 @@ type Application struct {
 	dependencies Dependencies
 }
 
-// NewBackend constructs the production core backend and synchronizes its first
-// real Docker projection before returning.
+// NewBackend constructs the production observer backend. Sessions subscribe
+// before requesting the initial status they need.
 func NewBackend(ctx context.Context, config BackendConfig) (*Application, error) {
 	dependencies, err := NewDependencies(config.Endpoint)
 	if err != nil {
 		return nil, err
 	}
-	if config.DebounceWindow == 0 {
-		config.DebounceWindow = 250 * time.Millisecond
-	}
 	if config.EventBufferCapacity == 0 {
 		config.EventBufferCapacity = 256
 	}
 
-	scope := backend.RefreshScope{Resource: backend.ResourceContainer, View: backend.ViewSummary}
 	registry := backend.NewLoaderRegistry()
-	if err := registry.Register(scope, backend.SnapshotLoaderFunc(func(ctx context.Context, _ backend.RefreshScope) (any, error) {
-		result, err := dependencies.Client.ContainerList(ctx, client.ContainerListOptions{All: true})
+	if err := registry.RegisterPageRefresh(backend.PageSystem, backend.RefreshKindBackendStatus, backend.RefreshLoaderFunc(func(ctx context.Context, _ backend.RefreshKey) (backend.EventPayload, error) {
+		result, err := dependencies.Client.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true})
 		if err != nil {
 			return nil, err
 		}
-		summaries := make([]foundationContainerSummary, 0, len(result.Items))
-		for _, item := range result.Items {
-			summaries = append(summaries, foundationContainerSummary{
-				ID: item.ID, Names: append([]string(nil), item.Names...), Image: item.Image,
-				State: string(item.State), Status: item.Status,
-			})
-		}
-		sort.Slice(summaries, func(i, j int) bool { return summaries[i].ID < summaries[j].ID })
-		return summaries, nil
+		return backend.BackendStatusUpdated{
+			APIVersion: result.APIVersion, OSType: result.OSType, Experimental: result.Experimental,
+		}, nil
 	})); err != nil {
 		_ = dependencies.Client.Close()
 		return nil, err
@@ -117,9 +104,7 @@ func NewBackend(ctx context.Context, config BackendConfig) (*Application, error)
 	core, err := backend.NewCore(ctx, backend.CoreConfig{
 		Clock:               config.Clock,
 		Loaders:             registry,
-		StartupScopes:       []backend.RefreshScope{scope},
 		RefreshPolicies:     config.RefreshPolicies,
-		DebounceWindow:      config.DebounceWindow,
 		EventBufferCapacity: config.EventBufferCapacity,
 		OwnedDockerClient:   dependencies.Client,
 	})
@@ -131,14 +116,6 @@ func NewBackend(ctx context.Context, config BackendConfig) (*Application, error)
 
 func (application *Application) UsesSharedMobyClient() bool {
 	return application.dependencies.UsesSharedClient()
-}
-
-type foundationContainerSummary struct {
-	ID     string   `json:"id"`
-	Names  []string `json:"names"`
-	Image  string   `json:"image"`
-	State  string   `json:"state"`
-	Status string   `json:"status"`
 }
 
 var _ backend.Backend = (*Application)(nil)

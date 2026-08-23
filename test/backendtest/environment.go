@@ -21,6 +21,6 @@ type IntegrationEnvironment struct {
 	DedicatedDaemon bool
 }
 
-// BackendFactory constructs the real production backend and returns only after
-// startup synchronization has completed.
+// BackendFactory constructs the real production backend. Tests subscribe before
+// requesting any initial data.
 type BackendFactory func(context.Context, IntegrationEnvironment) (backend.Backend, error)
