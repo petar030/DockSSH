@@ -15,10 +15,20 @@ architecture and implementation roadmap are documented in
 
 ## Development
 
-Run the local quality checks with:
+Run formatting, static analysis, and unit tests with:
 
 ```sh
 make check
 ```
+
+Run the real-Docker integration environment with:
+
+```sh
+make test-integration
+```
+
+See [`docs/testing.md`](docs/testing.md) for the test layout, environment
+configuration, safety rules, and instructions for connecting the future
+production backend to the conformance suite.
 
 The executable entry point is `./cmd/ssh-docker-tui`.
