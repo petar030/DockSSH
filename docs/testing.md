@@ -8,8 +8,16 @@ not contain fabricated implementations.
 
 ```text
 internal/backend/
-    contracts.go        production-facing interfaces and value types
-    errors.go           stable application error categories
+    contracts.go             production-facing interfaces and value types
+    state_store.go           immutable versioned snapshots
+    event_bus.go             typed bounded subscriptions
+    event_buffer.go          recent Docker-event ring
+    refresh_coordinator.go   centralized snapshot writer
+    refresh_scheduler.go     process-wide scheduled refreshes
+    core.go                  backend lifecycle and facade
+
+internal/platform/docker/
+    dependencies.go          real Moby, Docker CLI, and Compose wiring
 
 test/backendtest/
     environment.go      BackendFactory and IntegrationEnvironment
@@ -20,24 +28,29 @@ test/dockerfixture/
     fixture.go          real Moby client and resource tracking
     cleanup.go          deterministic dependency-order cleanup
 
+test/testkit/
+    clock.go            manually advanced clock and ticker
+    loader.go           recording loader and synchronization gate
+    closer.go           dependency-ownership recorder
+
 test/integration/
     docker_fixture_test.go       real-daemon fixture smoke test
-    backend_conformance_test.go  pending production-factory hook
+    backend_conformance_test.go  production core conformance entry point
 ```
 
 Production contracts stay in `internal/backend`. All reusable test support and
 real-Docker tests stay under `test`, separate from application behavior.
 
-## Current behavior before the backend exists
+## Current foundation
 
-The normal unit suite tests contracts and fixture safety without requiring a
-Docker daemon. The integration suite connects to a real Docker daemon and
-validates the fixture itself.
+The normal unit suite tests contracts, shared-state behavior, concurrency, and
+fixture safety without requiring Docker. The integration suite connects the
+production core backend to a real Docker daemon.
 
-`TestProductionBackendConformance` is explicitly skipped because there is no
-production `BackendFactory` yet. This is intentional: no placeholder backend
-returns fake success merely to make conformance tests green. The skipped hook
-will be replaced with a real factory as soon as the first backend slice exists.
+`TestProductionBackendConformance` now runs startup synchronization, explicit
+refresh, subscription cancellation, graceful shutdown, and shared-client
+ownership through the real Moby client. Later tab slices extend the same suite;
+they do not replace it with mocks.
 
 ## Commands
 
@@ -93,8 +106,10 @@ It also creates a temporary Compose root for that test.
 
 ## Resource safety and cleanup
 
-Tests must create resource names through `fixture.Name`, apply labels through
-`fixture.Labels`, and register every resource immediately after creation:
+The fixture deliberately does not expose its unrestricted Moby client. Each
+domain slice adds narrowly scoped arrangement and inspection helpers. Helpers
+must create names through `fixture.Name`, apply `fixture.Labels`, and register
+every resource immediately after creation:
 
 ```go
 fixture := dockerfixture.New(t)
@@ -119,7 +134,7 @@ Tests must never derive cleanup targets by listing arbitrary host resources.
 Use IDs returned by the create operation and keep assertions filtered to the
 current run's labels, prefix, resource IDs, or Compose project name.
 
-## Connecting the production backend
+## Production backend connection
 
 The reusable suite accepts a factory instead of importing a concrete backend:
 
@@ -130,8 +145,8 @@ type BackendFactory func(
 ) (backend.Backend, error)
 ```
 
-Once a real constructor exists, replace the pending test in
-`test/integration/backend_conformance_test.go` with the following shape:
+The production core is already connected in
+`test/integration/backend_conformance_test.go` using this shape:
 
 ```go
 func TestProductionBackendConformance(t *testing.T) {
@@ -145,10 +160,11 @@ func TestProductionBackendConformance(t *testing.T) {
 }
 ```
 
-The factory must use the real Moby client, Docker CLI object, Compose SDK,
-state store, refresh coordinator, event bus, event listener, and scheduler. It
-must return only after initial synchronization and must close cleanly through
-`Backend.Close`.
+The current factory uses the real Moby client, Docker CLI object, Compose SDK,
+state store, refresh coordinator, event bus, event buffer, and scheduler. It
+returns only after initial synchronization and closes through `Backend.Close`.
+The Docker event listener and its action-to-refresh mapping are added in the
+Events slice.
 
 ## TDD workflow
 

@@ -60,8 +60,19 @@ func (e *AppError) Unwrap() error {
 	return e.Err
 }
 
+// Is matches non-empty stable fields supplied by a target AppError.
+func (e *AppError) Is(target error) bool {
+	wanted, ok := target.(*AppError)
+	if !ok || e == nil {
+		return false
+	}
+	return (wanted.Code == "" || e.Code == wanted.Code) &&
+		(wanted.Operation == "" || e.Operation == wanted.Operation) &&
+		(wanted.Resource == "" || e.Resource == wanted.Resource) &&
+		(wanted.ID == "" || e.ID == wanted.ID)
+}
+
 // HasErrorCode reports whether err or any wrapped AppError has code.
 func HasErrorCode(err error, code ErrorCode) bool {
-	var appErr *AppError
-	return errors.As(err, &appErr) && appErr.Code == code
+	return errors.Is(err, &AppError{Code: code})
 }

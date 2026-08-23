@@ -71,6 +71,12 @@ type SnapshotMeta struct {
 	LastRefreshErr error
 }
 
+// Snapshot combines an immutable projection with its freshness metadata.
+type Snapshot[T any] struct {
+	Data T
+	Meta SnapshotMeta
+}
+
 // RefreshResult is returned to an explicit refresh caller.
 type RefreshResult struct {
 	Scope       RefreshScope
@@ -119,5 +125,55 @@ type EventFilter struct {
 // cancellation. Close must be safe to call more than once.
 type Subscription interface {
 	Events() <-chan AppEvent
+	Close() error
+}
+
+// AffectedResource identifies a resource touched by a command.
+type AffectedResource struct {
+	Type ResourceType
+	ID   string
+}
+
+// CommandResult describes an accepted short operation and the refreshes used
+// to observe its final Engine state.
+type CommandResult struct {
+	OperationID   string
+	Affected      []AffectedResource
+	RefreshScopes []RefreshScope
+	Asynchronous  bool
+}
+
+// ProgressEvent is one ordered update from a long-running job.
+type ProgressEvent struct {
+	Sequence uint64
+	Time     time.Time
+	Status   string
+	Resource string
+	Current  int64
+	Total    int64
+	Message  string
+}
+
+// JobResult is the terminal result of a long-running command.
+type JobResult struct {
+	JobID         string
+	Affected      []AffectedResource
+	RefreshScopes []RefreshScope
+	CompletedAt   time.Time
+}
+
+// Job exposes progress, cancellation, and exactly one terminal outcome.
+type Job interface {
+	ID() string
+	Progress() <-chan ProgressEvent
+	Wait(context.Context) (JobResult, error)
+	Cancel() error
+}
+
+// Stream owns ordered values and one terminal outcome. Done receives nil on
+// normal completion or one error, then closes.
+type Stream[T any] interface {
+	Values() <-chan T
+	Done() <-chan error
 	Close() error
 }

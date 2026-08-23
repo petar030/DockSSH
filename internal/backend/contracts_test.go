@@ -30,3 +30,10 @@ func TestHasErrorCodeFindsWrappedApplicationError(t *testing.T) {
 		t.Fatal("application error did not preserve its cause")
 	}
 }
+
+func TestHasErrorCodeFindsNestedApplicationError(t *testing.T) {
+	err := &AppError{Code: ErrorInternal, Err: &AppError{Code: ErrorNotFound}}
+	if !HasErrorCode(err, ErrorNotFound) {
+		t.Fatal("expected nested not-found category")
+	}
+}

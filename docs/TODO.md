@@ -4,18 +4,20 @@ TODO list for development
 - [x] Setup local git environment
 - [x] Develop a testing framework
 
+# Backend API
+
 ## Slice 0: Shared backend foundation
 
-- [ ] Freeze shared snapshot, refresh, event, subscription, stream, job, command-result, and error contracts
-- [ ] Replace direct fixture client usage with safe resource arrangement, inspection, and cleanup helpers
-- [ ] Add deterministic fake clock, scheduler, Docker adapter, and synchronization test utilities
-- [ ] Test and implement StateStore versioning, atomicity, unchanged writes, stale state, and concurrent access
-- [ ] Test and implement Event Bus filtering, ordering, cancellation, bounded delivery, and overflow behavior
-- [ ] Test and implement the Docker event ring buffer and eviction behavior
-- [ ] Test and implement RefreshCoordinator coalescing, debounce, failure handling, and event publication
-- [ ] Test and implement the refresh scheduler with deterministic time
-- [ ] Test and implement application bootstrap and single ownership of shared Docker/Compose dependencies
-- [ ] Connect the first production BackendFactory to the conformance suite
+- [x] Freeze shared snapshot, refresh, event, subscription, stream, job, command-result, and error contracts
+- [x] Remove unrestricted fixture client access and establish the safe helper and cleanup boundary
+- [x] Add deterministic fake clock, scheduler, Docker adapter, and synchronization test utilities
+- [x] Test and implement StateStore versioning, atomicity, unchanged writes, stale state, and concurrent access
+- [x] Test and implement Event Bus filtering, ordering, cancellation, bounded delivery, and overflow behavior
+- [x] Test and implement the Docker event ring buffer and eviction behavior
+- [x] Test and implement RefreshCoordinator coalescing, debounce, failure handling, and event publication
+- [x] Test and implement the refresh scheduler with deterministic time
+- [x] Test and implement application bootstrap and single ownership of shared Docker/Compose dependencies
+- [x] Connect the first production BackendFactory to the conformance suite
 
 ## Slice 1: Dashboard tab
 

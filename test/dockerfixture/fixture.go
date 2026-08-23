@@ -79,10 +79,14 @@ func NewWithConfig(t testing.TB, config Config) *Fixture {
 	return fixture
 }
 
-// Client exposes the test-owned client for arranging resources and verifying
-// Engine state. Production backends must construct and own their own client.
-func (fixture *Fixture) Client() *client.Client {
-	return fixture.client
+// DockerAPIVersion performs a bounded read-only connectivity check without
+// exposing the fixture's unrestricted Moby client.
+func (fixture *Fixture) DockerAPIVersion(ctx context.Context) (string, error) {
+	ping, err := fixture.client.Ping(ctx, client.PingOptions{})
+	if err != nil {
+		return "", fmt.Errorf("ping Docker daemon: %w", err)
+	}
+	return ping.APIVersion, nil
 }
 
 // Environment returns a safely copied configuration for BackendFactory.
