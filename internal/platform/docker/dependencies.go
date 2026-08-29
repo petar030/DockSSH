@@ -13,6 +13,7 @@ import (
 	"github.com/moby/moby/api/types/events"
 	"github.com/moby/moby/client"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
+	"github.com/petar030/ssh-native-docker-tui/internal/backend/dashboard"
 )
 
 // Dependencies groups the SDK objects shared by backend services. Bootstrap
@@ -88,6 +89,16 @@ func NewBackend(ctx context.Context, config BackendConfig) (*Application, error)
 	}
 
 	registry := backend.NewLoaderRegistry()
+	eventBuffer := backend.NewEventBuffer(config.EventBufferCapacity)
+	dashboardLoader, err := dashboard.NewLoader(dependencies.Client, eventBuffer)
+	if err != nil {
+		_ = dependencies.Client.Close()
+		return nil, err
+	}
+	if err := registry.RegisterPageRefresh(backend.PageDashboard, dashboard.RefreshKindSummary, dashboardLoader); err != nil {
+		_ = dependencies.Client.Close()
+		return nil, err
+	}
 	if err := registry.RegisterPageRefresh(backend.PageSystem, backend.RefreshKindBackendStatus, backend.RefreshLoaderFunc(func(ctx context.Context, _ backend.RefreshKey) (backend.EventPayload, error) {
 		result, err := dependencies.Client.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true})
 		if err != nil {
@@ -101,14 +112,20 @@ func NewBackend(ctx context.Context, config BackendConfig) (*Application, error)
 		return nil, err
 	}
 
+	eventSource := newMobyEventSource(dependencies.Client)
 	core, err := backend.NewCore(ctx, backend.CoreConfig{
-		Clock:               config.Clock,
-		Loaders:             registry,
-		RefreshPolicies:     config.RefreshPolicies,
-		EventBufferCapacity: config.EventBufferCapacity,
-		OwnedDockerClient:   dependencies.Client,
+		Clock:             config.Clock,
+		Loaders:           registry,
+		RefreshPolicies:   config.RefreshPolicies,
+		EventBuffer:       eventBuffer,
+		DockerEvents:      eventSource,
+		OwnedDockerClient: dependencies.Client,
 	})
 	if err != nil {
+		return nil, err
+	}
+	if err := eventSource.waitReady(ctx); err != nil {
+		_ = core.Close(context.Background())
 		return nil, err
 	}
 	return &Application{Core: core, dependencies: dependencies}, nil

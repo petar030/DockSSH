@@ -113,6 +113,10 @@ func NewRefreshCoordinator(config RefreshCoordinatorConfig) (*RefreshCoordinator
 
 // RefreshPage runs the complete base refresh configured for a TUI page.
 func (coordinator *RefreshCoordinator) RefreshPage(ctx context.Context, page Page) error {
+	return coordinator.refreshPage(ctx, page, RefreshManual)
+}
+
+func (coordinator *RefreshCoordinator) refreshPage(ctx context.Context, page Page, reason RefreshReason) error {
 	if !page.Valid() {
 		return &AppError{Code: ErrorInvalidInput, Operation: "refresh page", Resource: string(page)}
 	}
@@ -120,7 +124,7 @@ func (coordinator *RefreshCoordinator) RefreshPage(ctx context.Context, page Pag
 	if !ok {
 		return &AppError{Code: ErrorUnsupported, Operation: "refresh page", Resource: string(page)}
 	}
-	_, err := coordinator.Refresh(ctx, key, RefreshManual)
+	_, err := coordinator.Refresh(ctx, key, reason)
 	return err
 }
 

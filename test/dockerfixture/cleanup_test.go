@@ -46,3 +46,11 @@ func TestLabelsCannotOverrideFixtureIdentity(t *testing.T) {
 		t.Fatalf("resource-specific label missing: %v", labels)
 	}
 }
+
+func TestLabelsAcceptsNoExtraLabels(t *testing.T) {
+	fixture := &Fixture{config: Config{ResourceLabels: map[string]string{testLabel: "true"}}}
+	labels := fixture.Labels(nil)
+	if labels[testLabel] != "true" || len(labels) != 1 {
+		t.Fatalf("labels = %v", labels)
+	}
+}

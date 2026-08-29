@@ -2,6 +2,7 @@ package backend_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -112,4 +113,58 @@ func TestCoreConstructionFailureClosesOwnedClient(t *testing.T) {
 	if owner.Count() != 1 {
 		t.Fatalf("owned client close count = %d, want 1", owner.Count())
 	}
+}
+
+func TestDockerEventsRemainReadableWhileAffectedRefreshIsBlocked(t *testing.T) {
+	key := backend.RefreshKey{Kind: "dashboard.summary"}
+	registry := backend.NewLoaderRegistry()
+	gate := testkit.NewGate()
+	loader := testkit.NewRecordingLoader(2, func(ctx context.Context, _ backend.RefreshKey) (backend.EventPayload, error) {
+		if err := gate.Block(ctx); err != nil {
+			return nil, err
+		}
+		return backend.BackendStatusUpdated{}, nil
+	})
+	if err := registry.RegisterPageRefresh(backend.PageDashboard, key.Kind, loader); err != nil {
+		t.Fatalf("register Dashboard loader: %v", err)
+	}
+	source := &burstEventSource{release: make(chan struct{}), started: make(chan struct{})}
+	core, err := backend.NewCore(context.Background(), backend.CoreConfig{
+		Loaders: registry, DockerEvents: source,
+	})
+	if err != nil {
+		t.Fatalf("new core: %v", err)
+	}
+	t.Cleanup(func() { _ = core.Close(context.Background()) })
+	subscription, err := core.Subscribe(context.Background(), backend.PageEvents, backend.EventFilter{})
+	if err != nil {
+		t.Fatalf("subscribe to Events: %v", err)
+	}
+
+	close(source.release)
+	<-source.started
+	first := <-subscription.Events()
+	second := <-subscription.Events()
+	if first.Payload.(backend.DockerEventObserved).ResourceID != "one" ||
+		second.Payload.(backend.DockerEventObserved).ResourceID != "two" {
+		t.Fatalf("events = %#v, %#v", first, second)
+	}
+	gate.Release()
+}
+
+type burstEventSource struct {
+	once    sync.Once
+	release chan struct{}
+	started chan struct{}
+}
+
+func (source *burstEventSource) Listen(ctx context.Context, handle func(backend.DockerEventObserved)) error {
+	source.once.Do(func() {
+		<-source.release
+		handle(backend.DockerEventObserved{Resource: "unknown", ResourceID: "one"})
+		handle(backend.DockerEventObserved{Resource: "unknown", ResourceID: "two"})
+		close(source.started)
+	})
+	<-ctx.Done()
+	return ctx.Err()
 }

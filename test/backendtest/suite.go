@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
+	"github.com/petar030/ssh-native-docker-tui/internal/backend/dashboard"
 )
 
 // RunCoreConformance executes behavior shared by every production backend.
@@ -98,6 +99,32 @@ func RunCoreConformance(t *testing.T, factory BackendFactory, env IntegrationEnv
 
 		if err := subscription.Close(); err != nil {
 			t.Fatalf("idempotent subscription close: %v", err)
+		}
+	})
+
+	t.Run("Dashboard refresh publishes a complete real-Docker summary", func(t *testing.T) {
+		instance := openBackend(t, factory, env)
+		subscription, err := instance.Subscribe(context.Background(), backend.PageDashboard, backend.EventFilter{
+			Types: []backend.EventType{dashboard.EventSummaryUpdated},
+		})
+		if err != nil {
+			t.Fatalf("subscribe to Dashboard: %v", err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), env.Timeout)
+		defer cancel()
+		if err := instance.Refresh(ctx, backend.PageDashboard); err != nil {
+			t.Fatalf("refresh Dashboard: %v", err)
+		}
+		event := receiveEvent(t, ctx, subscription.Events())
+		summary, ok := event.Payload.(dashboard.SummaryUpdated)
+		if !ok {
+			t.Fatalf("Dashboard payload = %T", event.Payload)
+		}
+		if !summary.Engine.Available || summary.Engine.ServerVersion == "" || summary.Engine.APIVersion == "" {
+			t.Fatalf("Dashboard Engine summary = %#v", summary.Engine)
+		}
+		if event.Reason != backend.RefreshManual {
+			t.Fatalf("Dashboard refresh reason = %q", event.Reason)
 		}
 	})
 }

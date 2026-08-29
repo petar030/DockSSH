@@ -163,23 +163,17 @@ APIs and owns lifecycle:
 
 ```go
 type Backend interface {
-    Dashboard() DashboardAPI
-    Containers() ContainerAPI
-    Compose() ComposeAPI
-    Images() ImageAPI
-    Volumes() VolumeAPI
-    Networks() NetworkAPI
-    Events() EventsAPI
-    System() SystemAPI
-
     Refresh(context.Context, Page) error
     Subscribe(context.Context, Page, EventFilter) (Subscription, error)
     Close(context.Context) error
 }
 ```
 
-The exact facade may evolve as tab contracts are frozen, but it must retain one
-shared refresh path, one observation path, and explicit lifecycle ownership.
+Domain command and stream accessors are added when their slices freeze those
+contracts. Dashboard is read-only, so it needs no redundant domain accessor: its
+typed summary arrives through the shared page refresh and subscription methods.
+The facade must retain one shared refresh path, one observation path, and
+explicit lifecycle ownership.
 
 The public `Refresh` operation requests the complete base refresh configured for
 the page. TUI sessions do not construct internal refresh keys or supply trigger
@@ -308,10 +302,12 @@ All timing is injectable and deterministic in unit tests.
 
 ### Docker event listener and event buffer
 
-One listener consumes the Engine event stream. Each event is normalized once,
-added to the bounded recent-event ring, published as `DockerEventObserved`, and
-mapped to affected refresh keys. The listener requests those refreshes through
-the same coordinator used by every other trigger.
+One process-wide listener consumes the Engine event stream. It reconnects after
+transient stream failures and never opens more than one stream at a time. Each
+event is normalized once, added to the bounded recent-event ring, published as
+`DockerEventObserved`, and mapped to affected refresh keys. The listener
+requests those refreshes through the same coordinator used by every other
+trigger.
 
 An Engine event is a hint to reload authoritative state, not itself the final UI
 state. Each mapped refresh performs a new read; occasional duplicate reads are
@@ -361,7 +357,9 @@ domain boundary.
 
 ### Dashboard
 
-- Engine summary: availability, version, host, OS, architecture, and uptime.
+- Engine summary: availability, version, host, OS, architecture, capacity, and
+  Engine-reported system time. Docker does not expose a reliable daemon uptime
+  field through the Engine API.
 - Resource counts: running/stopped containers, images, volumes, and networks.
 - Docker disk usage.
 - Recent normalized events from the backend ring buffer.
@@ -471,13 +469,12 @@ commands and fixture rules are in `docs/testing.md`.
 
 ## Implementation order
 
-1. Use the completed observer-based Slice 0 foundation for every domain.
-2. Implement the process-wide Docker event ingestion foundation described by
-   Slice 0.5 in `docs/TODO.md`.
-3. Implement the Dashboard tab/window slice end to end.
-4. Implement Containers, Compose, Images, Volumes, Networks, Events, and System
+1. Use the completed observer and Docker-event foundations from Slices 0 and
+   0.5 for every domain.
+2. Use the completed Dashboard slice as the page-package pattern.
+3. Implement Containers, Compose, Images, Volumes, Networks, Events, and System
    in the order listed in `docs/TODO.md`.
-5. Finish lifecycle, race, cleanup, and full-facade quality gates.
+4. Finish lifecycle, race, cleanup, and full-facade quality gates.
 
 ## Explicitly removed architecture
 

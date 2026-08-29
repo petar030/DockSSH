@@ -113,6 +113,9 @@ func (fixture *Fixture) Name(suffix string) string {
 // Labels merges the identifying run labels with resource-specific labels.
 func (fixture *Fixture) Labels(extra map[string]string) map[string]string {
 	labels := maps.Clone(extra)
+	if labels == nil {
+		labels = make(map[string]string, len(fixture.config.ResourceLabels))
+	}
 	maps.Copy(labels, fixture.config.ResourceLabels)
 	return labels
 }
@@ -124,6 +127,21 @@ func (fixture *Fixture) RequireDedicatedDaemon(t testing.TB) {
 	if !fixture.config.DedicatedDaemon {
 		t.Skip("requires BACKEND_TEST_DEDICATED_DAEMON=true")
 	}
+}
+
+// CreateVolume creates, labels, and immediately tracks one isolated test
+// volume. It is intentionally narrow so integration tests never receive the
+// fixture's unrestricted Moby client.
+func (fixture *Fixture) CreateVolume(ctx context.Context, suffix string) (string, error) {
+	name := fixture.Name(suffix)
+	result, err := fixture.client.VolumeCreate(ctx, client.VolumeCreateOptions{
+		Name: name, Labels: fixture.Labels(nil),
+	})
+	if err != nil {
+		return "", fmt.Errorf("create test volume %q: %w", name, err)
+	}
+	fixture.TrackVolume(result.Volume.Name)
+	return result.Volume.Name, nil
 }
 
 // TrackContainer schedules force-removal of a container created by this test.

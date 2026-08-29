@@ -16,10 +16,15 @@ internal/backend/              production contracts and behavior
     event_buffer.go            bounded recent Docker-event history
     refresh_coordinator.go     direct refresh and page-bus publication
     refresh_scheduler.go       process-wide scheduled refresh requests
+    docker_event_listener.go   one reconnecting daemon-event consumer
     core.go                    backend facade and lifecycle
+
+internal/backend/dashboard/    Dashboard page package
+    dashboard.go               DTOs, typed update, and complete Docker loader
 
 internal/platform/docker/      real infrastructure adapters
     dependencies.go            shared Moby, Docker CLI, and Compose wiring
+    event_source.go             Moby event-stream normalization
 
 test/backendtest/              reusable black-box backend conformance suite
     environment.go             BackendFactory and IntegrationEnvironment
@@ -107,6 +112,7 @@ Docker daemon. They verify things fakes cannot establish reliably:
 - typed payloads created from real Docker data;
 - successful commands followed by authoritative refresh broadcasts;
 - Docker events mapped to refresh requests and updates;
+- a real labeled volume event triggering a complete Dashboard refresh;
 - logs, stats, exec, and job cancellation/closure;
 - lifecycle ownership of the shared Moby client;
 - cleanup of every resource created by the test.
@@ -136,6 +142,21 @@ make test-integration-race
 # Both race-enabled suites
 make test-all
 ```
+
+The current executable is also a small manual Dashboard and event-stream demo:
+
+```sh
+# Print one real Dashboard refresh and watch normalized Docker events for 10s.
+go run ./cmd/ssh-docker-tui
+
+# Print only the Dashboard result.
+go run ./cmd/ssh-docker-tui -watch=0
+```
+
+While the first command is watching, creating or starting a Docker resource in
+another terminal demonstrates both the process-wide event listener and its
+automatic Dashboard refresh. This console demo will be replaced by Wish and
+Bubble Tea when TUI implementation begins.
 
 These commands correspond to:
 

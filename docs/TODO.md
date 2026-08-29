@@ -22,18 +22,18 @@ TODO list for development
 
 ## Slice 0.5: Docker event ingestion foundation
 
-- [ ] Test and implement one process-wide Docker event listener using the shared Moby client
-- [ ] Normalize, buffer, and publish daemon events without blocking the Docker event stream
-- [ ] Map foundational Docker actions to the affected page refreshes and verify clean cancellation/reconnection
+- [x] Test and implement one process-wide Docker event listener using the shared Moby client
+- [x] Normalize, buffer, and publish daemon events without blocking the Docker event stream
+- [x] Map foundational Docker actions to the affected page refreshes and verify clean cancellation/reconnection
 
 ## Slice 1: Dashboard tab
 
-- [ ] Define Dashboard summary DTOs and API contracts
-- [ ] Test and implement the Engine summary window
-- [ ] Test and implement the resource-count summary window
-- [ ] Test and implement the Docker disk-usage window
-- [ ] Test and implement recent-events data shown on the Dashboard
-- [ ] Verify Dashboard refreshes after relevant cross-resource changes
+- [x] Define Dashboard summary DTOs and page event contracts
+- [x] Test and implement the Engine summary window
+- [x] Test and implement the resource-count summary window
+- [x] Test and implement the Docker disk-usage window
+- [x] Test and implement recent-events data shown on the Dashboard
+- [x] Verify Dashboard refreshes after relevant cross-resource changes
 
 ## Slice 2: Containers tab
 

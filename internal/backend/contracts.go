@@ -114,6 +114,7 @@ func (BackendStatusUpdated) EventType() EventType { return EventBackendStatusUpd
 
 // DockerEventObserved is one normalized Engine event retained by EventBuffer.
 type DockerEventObserved struct {
+	OccurredAt time.Time
 	Resource   string
 	ResourceID string
 	Project    string
@@ -122,6 +123,11 @@ type DockerEventObserved struct {
 }
 
 func (DockerEventObserved) EventType() EventType { return EventDockerObserved }
+
+func (event DockerEventObserved) CloneEventPayload() EventPayload {
+	event.Attributes = cloneAttributes(event.Attributes)
+	return event
+}
 
 // RefreshFailed tells observers that their existing local data may be stale.
 type RefreshFailed struct {

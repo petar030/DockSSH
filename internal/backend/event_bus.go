@@ -221,6 +221,10 @@ func cloneFilter(filter EventFilter) EventFilter {
 }
 
 func cloneEnvelope(event EventEnvelope) EventEnvelope {
+	if payload, ok := event.Payload.(interface{ CloneEventPayload() EventPayload }); ok {
+		event.Payload = payload.CloneEventPayload()
+		return event
+	}
 	switch payload := event.Payload.(type) {
 	case DockerEventObserved:
 		payload.Attributes = cloneAttributes(payload.Attributes)

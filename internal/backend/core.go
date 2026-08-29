@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"time"
 )
 
 var allPages = [...]Page{
@@ -23,6 +24,9 @@ var allPages = [...]Page{
 type CoreConfig struct {
 	Clock               Clock
 	EventBufferCapacity int
+	EventBuffer         *EventBuffer
+	DockerEvents        DockerEventSource
+	DockerEventRetry    time.Duration
 	Loaders             *LoaderRegistry
 	RefreshPolicies     []RefreshPolicy
 	OwnedDockerClient   io.Closer
@@ -39,6 +43,8 @@ type Core struct {
 
 	runCancel context.CancelFunc
 	runDone   chan error
+	eventDone chan error
+	eventWG   sync.WaitGroup
 	closeOnce sync.Once
 	closeDone chan struct{}
 	closeMu   sync.Mutex
@@ -58,6 +64,9 @@ func NewCore(ctx context.Context, config CoreConfig) (*Core, error) {
 	}
 	if config.Clock == nil {
 		config.Clock = realClock{}
+	}
+	if config.EventBuffer == nil {
+		config.EventBuffer = NewEventBuffer(config.EventBufferCapacity)
 	}
 	buses := make(map[Page]*EventBus, len(allPages))
 	for _, page := range allPages {
@@ -82,7 +91,7 @@ func NewCore(ctx context.Context, config CoreConfig) (*Core, error) {
 
 	core := &Core{
 		buses:       buses,
-		eventBuffer: NewEventBuffer(config.EventBufferCapacity),
+		eventBuffer: config.EventBuffer,
 		coordinator: coordinator,
 		scheduler:   scheduler,
 		owner:       config.OwnedDockerClient,
@@ -92,6 +101,21 @@ func NewCore(ctx context.Context, config CoreConfig) (*Core, error) {
 	runContext, runCancel := context.WithCancel(context.Background())
 	core.runCancel = runCancel
 	go func() { core.runDone <- scheduler.Run(runContext) }()
+	if config.DockerEvents != nil {
+		listener, listenerErr := NewDockerEventListener(
+			config.DockerEvents, config.Clock, config.DockerEventRetry, core.handleDockerEvent,
+		)
+		if listenerErr != nil {
+			runCancel()
+			<-core.runDone
+			_ = coordinator.Shutdown(context.Background())
+			closePageBuses(buses)
+			closeOwned(config.OwnedDockerClient)
+			return nil, listenerErr
+		}
+		core.eventDone = make(chan error, 1)
+		go func() { core.eventDone <- listener.Run(runContext) }()
+	}
 	return core, nil
 }
 
@@ -111,12 +135,28 @@ func (core *Core) Subscribe(ctx context.Context, page Page, filter EventFilter) 
 
 // ObserveDockerEvent publishes and buffers one already-normalized daemon event.
 func (core *Core) ObserveDockerEvent(event DockerEventObserved) (EventEnvelope, error) {
-	published, err := core.buses[PageEvents].Publish(EventEnvelope{Reason: RefreshDockerEvent, Payload: event})
+	published, err := core.buses[PageEvents].Publish(EventEnvelope{
+		Time: event.OccurredAt, Reason: RefreshDockerEvent, Payload: event,
+	})
 	if err != nil {
 		return EventEnvelope{}, err
 	}
 	core.eventBuffer.Add(published)
 	return published, nil
+}
+
+func (core *Core) handleDockerEvent(ctx context.Context, event DockerEventObserved) {
+	if _, err := core.ObserveDockerEvent(event); err != nil {
+		return
+	}
+	for _, page := range PagesAffectedByDockerEvent(event) {
+		page := page
+		core.eventWG.Add(1)
+		go func() {
+			defer core.eventWG.Done()
+			_ = core.coordinator.refreshPage(ctx, page, RefreshDockerEvent)
+		}()
+	}
 }
 
 func (core *Core) RecentDockerEvents(filter EventFilter, limit int) []EventEnvelope {
@@ -142,6 +182,11 @@ func (core *Core) Close(ctx context.Context) error {
 func (core *Core) shutdown() {
 	core.runCancel()
 	schedulerErr := <-core.runDone
+	var listenerErr error
+	if core.eventDone != nil {
+		listenerErr = <-core.eventDone
+	}
+	core.eventWG.Wait()
 	coordinatorErr := core.coordinator.Shutdown(context.Background())
 	var eventErr error
 	for _, page := range allPages {
@@ -152,7 +197,7 @@ func (core *Core) shutdown() {
 		ownerErr = core.owner.Close()
 	}
 	core.closeMu.Lock()
-	core.closeErr = errors.Join(schedulerErr, coordinatorErr, eventErr, ownerErr)
+	core.closeErr = errors.Join(schedulerErr, listenerErr, coordinatorErr, eventErr, ownerErr)
 	core.closeMu.Unlock()
 	close(core.closeDone)
 }
