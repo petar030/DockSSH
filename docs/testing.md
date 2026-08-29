@@ -31,6 +31,7 @@ internal/backend/refresh/      authoritative refresh routing and execution
 internal/backend/runtime/      process-wide Backend implementation
     backend.go                 facade, event routing, and lifecycle
     docker_events.go           one reconnecting daemon-event consumer
+    refresh_dispatcher.go      bounded backend-owned page refresh triggers
 
 internal/platform/docker/      real infrastructure adapters
     dependencies.go            shared Moby, Docker CLI, and Compose wiring
@@ -106,6 +107,8 @@ and deterministic:
 - bounded subscriber queues and explicit overflow/resync behavior;
 - recent-event ring-buffer ordering and eviction;
 - scheduler timing without real sleeps;
+- bounded automatic page-trigger collapsing and backend-owned cancellation;
+- successful commands recording shared refreshes after session cancellation;
 - context cancellation, graceful shutdown, ownership, and leak prevention.
 
 There are intentionally no tests for snapshot versions, cache comparison,
@@ -120,7 +123,7 @@ Docker daemon. They verify things fakes cannot establish reliably:
 
 - real Moby request/response behavior and error translation;
 - typed payloads created from real Docker data;
-- successful commands followed by authoritative refresh broadcasts;
+- successful commands followed asynchronously by authoritative refresh broadcasts;
 - Docker events mapped to refresh requests and updates;
 - a real labeled volume event triggering a complete Dashboard refresh;
 - logs, stats, exec, and job cancellation/closure;
@@ -153,20 +156,21 @@ make test-integration-race
 make test-all
 ```
 
-The current executable is also a small manual Dashboard and event-stream demo:
+The current executable is also a small manual Dashboard, Containers-list, and
+event-stream demo:
 
 ```sh
-# Print one real Dashboard refresh and watch normalized Docker events for 10s.
+# Print real Dashboard and Containers refreshes, then watch Docker events for 10s.
 go run ./cmd/ssh-docker-tui
 
-# Print only the Dashboard result.
+# Print the Dashboard and Containers results without watching.
 go run ./cmd/ssh-docker-tui -watch=0
 ```
 
 While the first command is watching, creating or starting a Docker resource in
-another terminal demonstrates both the process-wide event listener and its
-automatic Dashboard refresh. This console demo will be replaced by Wish and
-Bubble Tea when TUI implementation begins.
+another terminal demonstrates the process-wide event listener and automatic
+refreshes of the affected Dashboard or Containers page. This console demo will
+be replaced by Wish and Bubble Tea when TUI implementation begins.
 
 These commands correspond to:
 
@@ -193,6 +197,7 @@ only:
 | `BACKEND_TEST_PREFIX` | `ssh-docker-tui-test` | Prefix test resources. |
 | `BACKEND_TEST_TIMEOUT` | `30s` | Bound Docker operations and cleanup. |
 | `BACKEND_TEST_DEDICATED_DAEMON` | `false` | Permit tests requiring an isolated daemon. |
+| `BACKEND_TEST_CONTAINER_IMAGE` | `nginx:latest` | Existing Linux image with `sh`, used by Containers integration tests; it is never pulled or removed by the suite. |
 
 Each fixture invocation appends a cryptographically random run ID and labels
 created resources with:

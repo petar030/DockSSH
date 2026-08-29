@@ -14,6 +14,13 @@ type Backend interface {
 	Close(context.Context) error
 }
 
+// PageRefreshRequester records backend-owned background refresh work. Domain
+// services and infrastructure producers use it after changes; TUI sessions use
+// the synchronous Backend.Refresh method instead.
+type PageRefreshRequester interface {
+	RequestPage(Page, RefreshReason)
+}
+
 // Page identifies one TUI tab and its independent Event Bus.
 type Page string
 

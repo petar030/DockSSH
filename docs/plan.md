@@ -22,14 +22,16 @@ Docker SDK types directly.
 - Docker Engine is the authoritative state store.
 - Do not maintain a second general-purpose backend cache of resource snapshots.
 - Each connected TUI session is an observer and owns the data it renders.
-- Every refresh request performs a new authoritative read. There is no request
-  coalescing or command/event debounce state.
+- Every explicit refresh request performs a new authoritative read. Automatic
+  command and Docker-event page triggers pass through one bounded dispatcher;
+  repeated triggers for a page collapse only while that page is pending.
 - Each TUI tab has its own Event Bus. A session subscribes only to the bus for
   its active page and closes that subscription when it leaves the page.
 - A process-wide scheduler may request periodic refreshes. Sessions do not run
   independent polling loops.
-- Manual refreshes, Docker events, successful commands, completed jobs, startup,
-  and scheduled refreshes use the same coordinator.
+- Manual and scheduled refreshes call the coordinator directly. Docker events
+  and successful short commands mark affected pages in the process-wide
+  dispatcher, whose worker calls that same coordinator.
 - Commands and refresh requests are direct backend calls. Page Event Buses carry
   observations/results, not commands requiring a synchronous answer.
 - Logs, stats, progress, and a future interactive terminal are session-owned
@@ -103,6 +105,10 @@ Containers().Start(id) ───> Container service ─> shared Moby client ─>
                                   └──── after successful command <───────┘
                                                  │
                                                  v
+                                        Refresh dispatcher
+                                        (backend lifetime)
+                                                 │
+                                                 v
                                         Refresh catalog/coordinator
                                                  │ fresh Docker read
                                                  v
@@ -112,10 +118,12 @@ Containers().Start(id) ───> Container service ─> shared Moby client ─>
                                       every session viewing Containers
 ```
 
-The scheduler, Backend-owned Docker-event listener, and completed jobs enter at
-the same refresh-catalog step. The coordinator handles only refresh reads and
-Event Hub publication; domain services execute commands. Each session listens
-only to its active page bus and owns the data it renders.
+The Backend-owned Docker-event listener and successful domain commands submit
+page triggers to the same dispatcher. The scheduler already runs under the
+backend lifecycle and may call the coordinator directly. The coordinator
+handles only refresh reads and Event Hub publication; domain services execute
+commands. Each session listens only to its active page bus and owns the data it
+renders.
 
 ## Code organization
 
@@ -132,6 +140,9 @@ organized. The codebase keeps these responsibilities distinct:
   refresh executor and not a UI state store.
 - The refresh catalog/coordinator owns the mapping from refresh work to a page
   loader and turns a completed authoritative load into a typed page update.
+- The runtime refresh dispatcher owns one bounded pending entry per page. It
+  converts command and Docker-event triggers into backend-lifetime coordinator
+  calls without storing Docker resource state.
 - The Backend owns the process-wide Docker-event listener alongside its direct
   command and refresh entry points. When the listener receives a normalized
   daemon event, the Backend publishes that raw observation to the Events page
@@ -139,16 +150,15 @@ organized. The codebase keeps these responsibilities distinct:
   other affected pages. Publishing to `PageEvents` is not how Dashboard is
   refreshed.
 - The runtime Backend facade owns composition, lifecycle, direct routing of
-  client calls, and Docker-event handling. It contains no rendered resource
-  state or general resource cache. Future domain command services are direct
-  Backend APIs; after success they request refreshes through the refresh
-  catalog, whose typed results are published through the Event Hub.
+  client calls, Docker-event handling, and the refresh dispatcher. It contains
+  no rendered resource state or general resource cache. Future domain command
+  services are direct Backend APIs; after success they mark affected pages in
+  the dispatcher, whose typed refresh results are published through the Event
+  Hub.
 
-The implemented packages are `backend/eventhub`, `backend/refresh`, and
-`backend/runtime`. This separation is a code-organization rule, not a different
-architecture. The public behavior, direct-refresh model, page buses, refresh
-triggers, Docker-event mapping, and state ownership described in this plan
-remain the same.
+The implemented packages are `backend/eventhub`, `backend/refresh`,
+`backend/runtime`, `backend/dashboard`, and `backend/containers`. This
+separation is a code-organization rule, not a different architecture.
 
 ## State ownership
 
@@ -157,6 +167,7 @@ remain the same.
 | Containers, images, volumes, networks, and Engine facts | Docker Engine | Docker-managed |
 | Currently rendered resource data | Each TUI session | Session/view lifetime |
 | Active refresh contexts | Backend | Duration of each refresh |
+| Pending automatic page-refresh flags | Runtime dispatcher | Until handled or backend shutdown |
 | Recent normalized Docker events | Event Hub history | Bounded process lifetime |
 | Subscription queues | Relevant page Event Bus | Subscription lifetime |
 | Logs, stats, exec, and job progress | Initiating session | Stream/job lifetime |
@@ -188,6 +199,7 @@ Bootstrap creates and owns these process-wide dependencies:
 - one independent Event Bus for each TUI page;
 - one recent Docker-event buffer;
 - one refresh coordinator;
+- one bounded page refresh dispatcher;
 - one refresh scheduler;
 - one Docker event listener.
 
@@ -328,8 +340,28 @@ For each request it:
 4. publishes the successful typed payload to that page's subscribers;
 5. publishes `RefreshFailed` for operational failures and returns the error.
 
-Concurrent refreshes, including identical keys, execute independently. The
-coordinator keeps no request map, debounce record, or loaded resource result.
+Concurrent direct refreshes, including identical keys, execute independently.
+The coordinator keeps no request map, debounce record, or loaded resource
+result. Automatic page-trigger collapsing belongs only to the runtime
+dispatcher described below.
+
+### Runtime refresh dispatcher
+
+The runtime owns one process-wide dispatcher for automatic page refreshes from
+successful short commands and Docker events. `RequestPage` synchronously marks
+one of the finite application pages dirty and returns without waiting for a
+Docker read. A single backend-lifetime worker calls the existing coordinator.
+
+At most one pending entry exists per page. If ten matching triggers arrive
+before the page is handled, one authoritative read is sufficient. If another
+trigger arrives while that read is running, the page remains dirty and is read
+once more afterward. This is bounded refresh-trigger state, not a Docker
+resource cache and not a command queue.
+
+Explicit `Backend.Refresh(ctx, page)` remains synchronous and uses the caller's
+context. Docker mutations also remain direct calls under the initiating
+session's context. Only their shared follow-up page refreshes use the dispatcher
+and survive session disconnection.
 
 ### Refresh scheduler
 
@@ -338,8 +370,9 @@ container lists, image lists, project lists, dashboard summaries, disk usage,
 and Engine information. It must never inspect every individual resource on a
 timer.
 
-Detailed windows refresh when opened, manually requested, or affected by a
-known Docker event/command. The first implementation may refresh base topics
+Detailed windows refresh when opened or explicitly requested by the session
+that owns the current selection. Automatic command and Docker-event triggers
+refresh affected base pages. The first implementation may refresh base topics
 even with no subscribers; interest-aware scheduling is a later optimization.
 All timing is injectable and deterministic in unit tests.
 
@@ -349,8 +382,8 @@ The Backend owns one process-wide listener that consumes the Engine event
 stream. It reconnects after transient stream failures and never opens more than
 one stream at a time. Each event is normalized once, published by the Backend
 to the Event Hub's Events-page bus, added to bounded Event Hub history, and
-mapped to affected refresh keys. The Backend requests those refreshes through
-the same coordinator used by every other trigger.
+mapped to affected pages. The Backend marks those pages in the process-wide
+refresh dispatcher.
 
 An Engine event is a hint to reload authoritative state, not itself the final UI
 state. Each mapped refresh performs a new read; occasional duplicate reads are
@@ -359,9 +392,11 @@ accepted in exchange for straightforward behavior.
 ### Domain services
 
 Domain services wrap the shared Docker/Compose dependencies. They translate SDK
-types and errors into stable application DTOs, perform commands, and request the
-affected refreshes after successful mutations. They do not publish fabricated
-final state before Docker has been read again.
+types and errors into stable application DTOs and perform commands directly
+under the initiating session context. After Docker reports success, they
+synchronously mark affected base pages in the shared dispatcher before
+returning. They do not publish fabricated final state before Docker has been
+read again.
 
 ## Communication models
 
@@ -373,9 +408,11 @@ final state before Docker has been read again.
 - **Job:** long-running Compose up/build/pull and image pull operations with
   progress, completion, and cancellation.
 
-Successful commands return a `CommandResult` and then request the required
-refresh keys. Successful jobs do the same on completion. Progress remains
-private to the initiating session; final resource updates are broadcast.
+Successful commands mark their affected pages for backend-owned refresh and
+then return a `CommandResult`. Successful jobs do the same on completion.
+Progress remains private to the initiating session; final resource updates are
+broadcast. A details window remains session-owned and explicitly requests its
+selected resource when it needs a targeted reload.
 
 Every blocking operation accepts `context.Context`. Cancellation must stop
 waiting promptly and must not leak goroutines, readers, subscriptions, or

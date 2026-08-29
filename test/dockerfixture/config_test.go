@@ -11,6 +11,7 @@ func TestConfigFromEnvCreatesIsolatedRun(t *testing.T) {
 	t.Setenv("BACKEND_TEST_TIMEOUT", "17s")
 	t.Setenv("BACKEND_TEST_DOCKER_HOST", "tcp://127.0.0.1:2375")
 	t.Setenv("BACKEND_TEST_DEDICATED_DAEMON", "true")
+	t.Setenv("BACKEND_TEST_CONTAINER_IMAGE", "example:test")
 
 	first, err := ConfigFromEnv()
 	if err != nil {
@@ -35,6 +36,9 @@ func TestConfigFromEnvCreatesIsolatedRun(t *testing.T) {
 	}
 	if !first.DedicatedDaemon {
 		t.Fatal("dedicated-daemon flag was not parsed")
+	}
+	if first.ContainerImage != "example:test" {
+		t.Fatalf("container image = %q", first.ContainerImage)
 	}
 	if first.ResourceLabels[testLabel] != "true" || first.ResourceLabels[runLabel] == "" {
 		t.Fatalf("missing identifying labels: %v", first.ResourceLabels)

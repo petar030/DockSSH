@@ -32,7 +32,7 @@ configuration, safety rules, and instructions for connecting the future
 production backend to the conformance suite.
 
 Until the Wish/Bubble Tea interface is implemented, manually exercise the real
-Dashboard loader and Docker event listener with:
+Dashboard loader, Containers list, and Docker event listener with:
 
 ```sh
 go run ./cmd/ssh-docker-tui

@@ -13,10 +13,11 @@ import (
 )
 
 const (
-	defaultPrefix  = "ssh-docker-tui-test"
-	defaultTimeout = 30 * time.Second
-	testLabel      = "io.github.petar030.ssh-native-docker-tui.test"
-	runLabel       = "io.github.petar030.ssh-native-docker-tui.test-run"
+	defaultPrefix         = "ssh-docker-tui-test"
+	defaultTimeout        = 30 * time.Second
+	defaultContainerImage = "nginx:latest"
+	testLabel             = "io.github.petar030.ssh-native-docker-tui.test"
+	runLabel              = "io.github.petar030.ssh-native-docker-tui.test-run"
 )
 
 // Config controls one isolated integration-test run.
@@ -26,6 +27,7 @@ type Config struct {
 	ResourceLabels  map[string]string
 	Timeout         time.Duration
 	DedicatedDaemon bool
+	ContainerImage  string
 }
 
 // ConfigFromEnv creates a unique configuration from BACKEND_TEST_* variables.
@@ -67,7 +69,15 @@ func ConfigFromEnv() (Config, error) {
 		ResourceLabels:  map[string]string{testLabel: "true", runLabel: runID},
 		Timeout:         timeout,
 		DedicatedDaemon: dedicated,
+		ContainerImage:  valueOrDefault("BACKEND_TEST_CONTAINER_IMAGE", defaultContainerImage),
 	}, nil
+}
+
+func valueOrDefault(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func parseOptionalBool(name string) (bool, error) {

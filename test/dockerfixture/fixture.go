@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/containerd/errdefs"
+	containertypes "github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 	"github.com/petar030/ssh-native-docker-tui/test/backendtest"
 )
@@ -46,6 +47,9 @@ func NewWithConfig(t testing.TB, config Config) *Fixture {
 	}
 	if len(config.ResourceLabels) == 0 {
 		t.Fatal("Docker integration fixture requires identifying labels")
+	}
+	if config.ContainerImage == "" {
+		config.ContainerImage = defaultContainerImage
 	}
 	config.ResourceLabels = maps.Clone(config.ResourceLabels)
 
@@ -120,6 +124,12 @@ func (fixture *Fixture) Labels(extra map[string]string) map[string]string {
 	return labels
 }
 
+// ContainerImage returns the pre-existing image selected for Container tests.
+// The fixture never pulls or removes this shared base image.
+func (fixture *Fixture) ContainerImage() string {
+	return fixture.config.ContainerImage
+}
+
 // RequireDedicatedDaemon prevents an unsafe test (for example, unrestricted
 // prune) from running against a developer's shared daemon.
 func (fixture *Fixture) RequireDedicatedDaemon(t testing.TB) {
@@ -142,6 +152,25 @@ func (fixture *Fixture) CreateVolume(ctx context.Context, suffix string) (string
 	}
 	fixture.TrackVolume(result.Volume.Name)
 	return result.Volume.Name, nil
+}
+
+// CreateContainer creates, labels, and immediately tracks one isolated test
+// container. The configured image must already exist on the test daemon.
+func (fixture *Fixture) CreateContainer(ctx context.Context, suffix string, command []string) (string, error) {
+	name := fixture.Name(suffix)
+	result, err := fixture.client.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name: name,
+		Config: &containertypes.Config{
+			Image:  fixture.config.ContainerImage,
+			Cmd:    append([]string(nil), command...),
+			Labels: fixture.Labels(nil),
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("create test container %q from %q: %w", name, fixture.config.ContainerImage, err)
+	}
+	fixture.TrackContainer(result.ID)
+	return result.ID, nil
 }
 
 // TrackContainer schedules force-removal of a container created by this test.

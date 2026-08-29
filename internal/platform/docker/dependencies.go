@@ -13,6 +13,7 @@ import (
 	"github.com/moby/moby/api/types/events"
 	"github.com/moby/moby/client"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
+	"github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/dashboard"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/eventhub"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/refresh"
@@ -109,6 +110,27 @@ func NewBackend(ctx context.Context, config BackendConfig) (*Application, error)
 		_ = dependencies.Client.Close()
 		return nil, err
 	}
+	containersLoader, err := containers.NewLoader(dependencies.Client)
+	if err != nil {
+		_ = events.Close()
+		_ = dependencies.Client.Close()
+		return nil, err
+	}
+	if err := catalog.RegisterPage(backend.PageContainers, containers.RefreshKindList, containersLoader); err != nil {
+		_ = events.Close()
+		_ = dependencies.Client.Close()
+		return nil, err
+	}
+	if err := catalog.Register(backend.PageContainers, containers.RefreshKindDetails, containersLoader); err != nil {
+		_ = events.Close()
+		_ = dependencies.Client.Close()
+		return nil, err
+	}
+	if err := catalog.Register(backend.PageContainers, containers.RefreshKindProcesses, containersLoader); err != nil {
+		_ = events.Close()
+		_ = dependencies.Client.Close()
+		return nil, err
+	}
 	if err := catalog.RegisterPage(backend.PageSystem, backend.RefreshKindBackendStatus, backend.RefreshLoaderFunc(func(ctx context.Context, _ backend.RefreshKey) (backend.EventPayload, error) {
 		result, err := dependencies.Client.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true})
 		if err != nil {
@@ -130,12 +152,28 @@ func NewBackend(ctx context.Context, config BackendConfig) (*Application, error)
 		_ = dependencies.Client.Close()
 		return nil, err
 	}
+	dispatcher, err := backendruntime.NewRefreshDispatcher(refreshes)
+	if err != nil {
+		_ = refreshes.Shutdown(context.Background())
+		_ = events.Close()
+		_ = dependencies.Client.Close()
+		return nil, err
+	}
+	containersService, err := containers.NewService(dependencies.Client, refreshes, dispatcher)
+	if err != nil {
+		_ = dispatcher.Close()
+		_ = refreshes.Shutdown(context.Background())
+		_ = events.Close()
+		_ = dependencies.Client.Close()
+		return nil, err
+	}
 
 	eventSource := newMobyEventSource(dependencies.Client)
 	applicationBackend, err := backendruntime.New(ctx, backendruntime.Config{
 		Clock: clock, EventHub: events, Refreshes: refreshes,
-		RefreshPolicies: config.RefreshPolicies, DockerEvents: eventSource,
-		OwnedDockerClient: dependencies.Client,
+		RefreshDispatcher: dispatcher,
+		RefreshPolicies:   config.RefreshPolicies, DockerEvents: eventSource,
+		OwnedDockerClient: dependencies.Client, Containers: containersService,
 	})
 	if err != nil {
 		return nil, err
@@ -152,3 +190,4 @@ func (application *Application) UsesSharedMobyClient() bool {
 }
 
 var _ backend.Backend = (*Application)(nil)
+var _ containers.Backend = (*Application)(nil)
