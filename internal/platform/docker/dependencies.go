@@ -128,12 +128,12 @@ func NewBackend(ctx context.Context, config BackendConfig) (*Application, error)
 		_ = dependencies.Client.Close()
 	}
 
-	dashboardAPI, err := dashboard.NewAPI(dependencies.Client, events)
+	dashboardRefresh, err := dashboard.NewRefreshHandler(dependencies.Client, events)
 	if err != nil {
 		cleanup()
 		return nil, err
 	}
-	if err := refreshes.RegisterPage(backend.PageDashboard, dashboard.RefreshKindSummary, dashboardAPI.ReadRefresh); err != nil {
+	if err := refreshes.RegisterPage(backend.PageDashboard, dashboard.RefreshKindSummary, dashboardRefresh.ReadRefresh); err != nil {
 		cleanup()
 		return nil, err
 	}

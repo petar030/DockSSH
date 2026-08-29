@@ -1,4 +1,3 @@
-// Package dashboard implements the complete Dashboard page API.
 package dashboard
 
 import (
@@ -27,46 +26,48 @@ type eventHistory interface {
 	Recent(backend.EventFilter, int) []backend.EventEnvelope
 }
 
-// API reads every Dashboard window from Docker and recent event history. It
-// owns no lifecycle and stores no Docker resource state.
-type API struct {
+// RefreshHandler is the Dashboard's runtime-only refresh implementation.
+// Dashboard has no domain-specific TUI API: sessions subscribe to
+// PageDashboard and call Backend.RequestRefresh(PageDashboard).
+type RefreshHandler struct {
 	docker dockerReader
 	events eventHistory
 }
 
-func NewAPI(docker dockerReader, events eventHistory) (*API, error) {
+func NewRefreshHandler(docker dockerReader, events eventHistory) (*RefreshHandler, error) {
 	if docker == nil || events == nil {
-		return nil, &backend.AppError{Code: backend.ErrorInvalidInput, Operation: "create Dashboard API"}
+		return nil, &backend.AppError{Code: backend.ErrorInvalidInput, Operation: "create Dashboard refresh handler"}
 	}
-	return &API{docker: docker, events: events}, nil
+	return &RefreshHandler{docker: docker, events: events}, nil
 }
 
-// ReadRefresh performs the authoritative Dashboard read selected by key. It is
-// called only by the backend-owned Refresh Manager.
-func (api *API) ReadRefresh(ctx context.Context, key backend.RefreshKey) (backend.EventPayload, error) {
+// ReadRefresh is registered by runtime bootstrap and called only by the
+// backend-owned RefreshManager. Dashboard sessions receive its typed result
+// from the Dashboard Event Bus.
+func (handler *RefreshHandler) ReadRefresh(ctx context.Context, key backend.RefreshKey) (backend.EventPayload, error) {
 	if key.Kind != RefreshKindSummary || key.ID != "" {
 		return nil, &backend.AppError{
 			Code: backend.ErrorUnsupported, Operation: "read Dashboard refresh", Resource: string(key.Kind), ID: key.ID,
 		}
 	}
 
-	ping, err := api.docker.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true})
+	ping, err := handler.docker.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true})
 	if err != nil {
 		return nil, fmt.Errorf("load Dashboard Engine availability: %w", err)
 	}
-	infoResult, err := api.docker.Info(ctx, client.InfoOptions{})
+	infoResult, err := handler.docker.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("load Dashboard Engine information: %w", err)
 	}
-	volumes, err := api.docker.VolumeList(ctx, client.VolumeListOptions{})
+	volumes, err := handler.docker.VolumeList(ctx, client.VolumeListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("load Dashboard volume count: %w", err)
 	}
-	networks, err := api.docker.NetworkList(ctx, client.NetworkListOptions{})
+	networks, err := handler.docker.NetworkList(ctx, client.NetworkListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("load Dashboard network count: %w", err)
 	}
-	disk, err := api.docker.DiskUsage(ctx, client.DiskUsageOptions{
+	disk, err := handler.docker.DiskUsage(ctx, client.DiskUsageOptions{
 		Containers: true, Images: true, Volumes: true, BuildCache: true,
 	})
 	if err != nil {
@@ -92,7 +93,7 @@ func (api *API) ReadRefresh(ctx context.Context, key backend.RefreshKey) (backen
 			Volumes:    diskUsage(disk.Volumes.TotalCount, disk.Volumes.ActiveCount, disk.Volumes.TotalSize, disk.Volumes.Reclaimable),
 			BuildCache: diskUsage(disk.BuildCache.TotalCount, disk.BuildCache.ActiveCount, disk.BuildCache.TotalSize, disk.BuildCache.Reclaimable),
 		},
-		RecentEvents: recentEvents(api.events.Recent(backend.EventFilter{
+		RecentEvents: recentEvents(handler.events.Recent(backend.EventFilter{
 			Types: []backend.EventType{backend.EventDockerObserved},
 		}, recentEventLimit)),
 	}, nil

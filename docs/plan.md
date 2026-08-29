@@ -247,36 +247,119 @@ called.
 
 ## Page APIs and code organization
 
-Each page follows one consistent layout:
+Each page with a domain-specific TUI API separates its TUI-facing facade from
+backend-only handlers. A read-only page with no domain-specific TUI calls (the
+current Dashboard) has no `api.go`; it has only its runtime refresh handler.
+The split is code organization only: command execution, refresh, event,
+context, and stream behavior do not change because files move.
 
 ```text
 internal/backend/<page>/
-├── api.go       refresh reads, commands and streams grouped by comments
+├── api.go       TUI-facing methods and API construction only
+├── commands.go  private page-specific CommandRequest construction (if needed)
+├── refresh.go   RefreshManager handler and private Docker read mapping
+├── streams.go   private session-stream implementation (if needed)
+├── docker.go    private narrow Docker client contract (if needed)
 ├── types.go     DTOs, options and typed event payloads
-├── errors.go    only when domain error translation is needed
-└── api_test.go
+├── errors.go    error translation (only when needed)
+└── api_test.go  page contract tests
 ```
 
-A page API is a thin dependency holder, not an independently opened service:
+Not every page needs every file. Do not create empty packages or speculative
+files before a roadmap slice implements that page.
+
+`api.go` contains only methods a TUI session may call. A targeted-refresh method
+validates its input and calls the injected `RefreshRequester` directly. A short
+command method builds its private request, then calls the injected
+`CommandRunner` directly. `api.go` does not contain a Docker command callback
+body, a refresh read, or a stream-reader goroutine. Docker SDK types never
+cross a page API boundary.
+
+`commands.go` keeps each page's private Docker mutation callback next to the
+operation it describes. The shared `CommandExecutor` receives the completed
+`CommandRequest`, provides queueing/workers/timeout/backend context, and is the
+only component that calls its `Run` callback.
+
+`refresh.go` defines `ReadRefresh`. This exported method is **runtime-facing**,
+not TUI-facing: bootstrap registers it with `RefreshManager`, which is its only
+caller. The manager owns the read context/timeout and publishes the resulting
+typed event to the routed page bus.
+
+`streams.go` holds private implementation of session-owned readers. The TUI
+opens a stream through `api.go`, but its view/session context owns its lifetime.
+
+### TUI-accessible common Backend API
+
+Every TUI page may use only this common facade:
 
 ```go
-type API struct {
-    docker   DockerClient
-    commands CommandRunner // only for pages with commands
+type Backend interface {
+    RequestRefresh(Page) error
+    Subscribe(context.Context, Page, EventFilter) (Subscription, error)
+    Close(context.Context) error
 }
 ```
 
+`RequestRefresh` is a generic request for a page's registered base refresh. It
+is intentionally not TUI-only: manual page entry, a scheduler, Docker events,
+command completion, jobs, and overflow recovery all submit work to the same
+`RefreshManager`. A successful call confirms queue acceptance; a typed update
+or `RefreshFailed` arrives through `Subscribe`.
+
+### Page API inventory
+
+| Page | TUI-facing API | Runtime-only handler | Status |
+| --- | --- | --- | --- |
+| Dashboard | Subscribe to `PageDashboard`; `Backend.RequestRefresh(PageDashboard)` | `Dashboard.RefreshHandler.ReadRefresh` | Implemented, read-only |
+| Containers | `RequestDetails`, `RequestProcesses`, `Start`, `Stop`, `Restart`, `Pause`, `Unpause`, `Kill`, `Rename`, `Remove`, `Logs`, `Stats` | `Containers.API.ReadRefresh` | Implemented |
+| Compose | Project/service refresh requests, short lifecycle commands, logs, future job submission/progress subscription | `Compose.API.ReadRefresh` | Planned in Slice 3 |
+| Images | List/details refresh requests, tag/remove/scoped-prune commands, future pull-job API | `Images.API.ReadRefresh` | Planned in Slice 4 |
+| Volumes | List/details/attached-container refresh requests, create/remove/scoped-prune commands | `Volumes.API.ReadRefresh` | Planned in Slice 5 |
+| Networks | List/details/connected-container refresh requests, create/remove/connect/disconnect/scoped-prune commands | `Networks.API.ReadRefresh` | Planned in Slice 6 |
+| Events | Session-local event filtering and page subscription controls | Any future authoritative Events-page handler | Planned in Slice 7; raw Docker events remain runtime-owned |
+| System | System refresh requests and deliberately scoped prune commands | `System.API.ReadRefresh` | Planned in Slice 8 |
+
+This inventory describes page responsibilities, not prematurely frozen Go
+method names for unimplemented slices. Each slice defines its exact exported
+DTO/options/API contracts test-first in `types.go` and `api_test.go`.
+
+### Implemented page details
+
+**Dashboard.** It has no domain-specific callable API yet. A TUI subscribes to
+`PageDashboard` and calls `Backend.RequestRefresh(PageDashboard)`. The
+Dashboard refresh handler performs its Engine/count/disk/history reads and
+publishes `SummaryUpdated`.
+
+**Containers.** The TUI calls the methods listed above through
+`application.Containers()`. Targeted details/process methods request updates
+on `PageContainers`; their results remain typed page events, filtered by full
+`{kind, ID}` keys when needed. Short commands are submitted to the shared
+executor. Logs and stats are session-owned streams.
+
+The current implemented packages are therefore:
+
+```text
+internal/backend/dashboard/
+├── refresh.go
+├── types.go
+└── api_test.go
+
+internal/backend/containers/
+├── api.go
+├── commands.go
+├── docker.go
+├── refresh.go
+├── streams.go
+├── types.go
+├── errors.go
+└── api_test.go
+```
+
 Page APIs have no `Open`, `Close`, `closed`, `ensureOpen`, lifecycle mutex or
-resource cache. Runtime components own process lifecycle.
-
-Each page API exposes one `ReadRefresh` function to the Refresh Manager. The
-Containers API also exposes commands, targeted refresh requests, logs and
-stats. Docker SDK types never cross the page API boundary.
-
-Container list, details and process results are typed events on
-`PageContainers`. Details and processes use the full `{kind, ID}` refresh key;
-subscriptions may filter by type/key. They are deliberately not changed to
-direct return values.
+resource cache. Runtime components own process lifecycle. Container list,
+details and process results are typed events on `PageContainers`. Details and
+processes use the full `{kind, ID}` refresh key; subscriptions may filter by
+type/key. They are deliberately not changed to direct return values.
 
 ## API categories
 

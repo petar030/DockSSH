@@ -40,12 +40,12 @@ func TestAPIReturnsCompleteDashboardSummary(t *testing.T) {
 			BuildCache: client.BuildCacheDiskUsage{TotalCount: 6, ActiveCount: 2, TotalSize: 400, Reclaimable: 150},
 		},
 	}
-	api, err := NewAPI(docker, history)
+	handler, err := NewRefreshHandler(docker, history)
 	if err != nil {
 		t.Fatalf("new API: %v", err)
 	}
 
-	payload, err := api.ReadRefresh(context.Background(), backend.RefreshKey{Kind: RefreshKindSummary})
+	payload, err := handler.ReadRefresh(context.Background(), backend.RefreshKey{Kind: RefreshKindSummary})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -69,11 +69,11 @@ func TestAPIReturnsCompleteDashboardSummary(t *testing.T) {
 
 func TestAPIReturnsDockerFailure(t *testing.T) {
 	docker := &fakeDockerReader{pingErr: errors.New("daemon unavailable")}
-	api, err := NewAPI(docker, eventhub.NewHistory(1))
+	handler, err := NewRefreshHandler(docker, eventhub.NewHistory(1))
 	if err != nil {
 		t.Fatalf("new API: %v", err)
 	}
-	if _, err := api.ReadRefresh(context.Background(), backend.RefreshKey{Kind: RefreshKindSummary}); err == nil {
+	if _, err := handler.ReadRefresh(context.Background(), backend.RefreshKey{Kind: RefreshKindSummary}); err == nil {
 		t.Fatal("load succeeded with a failed Docker ping")
 	}
 }
