@@ -12,15 +12,25 @@ This document describes the implemented observer-based foundation in
 ```text
 internal/backend/              production contracts and behavior
     contracts.go               shared refresh/event/lifecycle contracts
-    event_bus.go               typed bounded subscriptions
-    event_buffer.go            bounded recent Docker-event history
-    refresh_coordinator.go     direct refresh and page-bus publication
-    refresh_scheduler.go       process-wide scheduled refresh requests
-    docker_event_listener.go   one reconnecting daemon-event consumer
-    core.go                    backend facade and lifecycle
+    errors.go                  stable application error categories
+    clock.go                   injectable production timing boundary
 
 internal/backend/dashboard/    Dashboard page package
     dashboard.go               DTOs, typed update, and complete Docker loader
+
+internal/backend/eventhub/     observation delivery and event history
+    hub.go                     page routing and bounded Docker-event history
+    bus.go                     typed bounded subscriptions
+    history.go                 recent normalized Docker events
+
+internal/backend/refresh/      authoritative refresh routing and execution
+    catalog.go                 page/key-to-loader routing
+    coordinator.go             direct loads and Event Hub publication
+    scheduler.go               process-wide scheduled refresh requests
+
+internal/backend/runtime/      process-wide Backend implementation
+    backend.go                 facade, event routing, and lifecycle
+    docker_events.go           one reconnecting daemon-event consumer
 
 internal/platform/docker/      real infrastructure adapters
     dependencies.go            shared Moby, Docker CLI, and Compose wiring
@@ -231,7 +241,7 @@ environment to the reusable suite:
 func TestProductionBackendConformance(t *testing.T) {
     fixture := dockerfixture.New(t)
 
-    backendtest.RunCoreConformance(
+    backendtest.RunBackendConformance(
         t,
         productionBackendFactory,
         fixture.Environment(),
@@ -240,9 +250,10 @@ func TestProductionBackendConformance(t *testing.T) {
 ```
 
 The production factory constructs the real shared client, infrastructure
-adapters, page Event Buses, coordinator, event buffer, and scheduler, and returns the
-backend facade. It must not perform a hidden cache warm-up. The suite subscribes
-and explicitly requests the initial refresh it needs.
+adapters, Event Hub, refresh catalog/coordinator, Backend-owned Docker listener,
+and scheduler, and returns the Backend facade. It must not perform a hidden
+cache warm-up. The suite subscribes and explicitly requests the initial refresh
+it needs.
 
 ## TDD workflow per slice
 

@@ -15,7 +15,7 @@ import (
 
 func TestProductionBackendConformance(t *testing.T) {
 	fixture := dockerfixture.New(t)
-	backendtest.RunCoreConformance(t, productionBackendFactory, fixture.Environment())
+	backendtest.RunBackendConformance(t, productionBackendFactory, fixture.Environment())
 }
 
 func TestProductionBootstrapSharesOneMobyClient(t *testing.T) {

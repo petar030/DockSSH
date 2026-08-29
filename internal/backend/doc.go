@@ -1,4 +1,4 @@
-// Package backend provides the shared in-process application layer used by all
-// SSH sessions. It coordinates authoritative refreshes and broadcasts typed
-// results; each session owns the data it renders.
+// Package backend defines the stable in-process contracts shared by the TUI,
+// page domains, and Backend infrastructure. The runtime implementation lives in
+// the runtime child package.
 package backend

@@ -13,13 +13,19 @@ type Clock interface {
 	NewTicker(time.Duration) Ticker
 }
 
-// Ticker is the minimal periodic timer contract used by RefreshScheduler.
+// Ticker is the minimal periodic timer contract used by the refresh scheduler.
 type Ticker interface {
 	C() <-chan time.Time
 	Stop()
 }
 
 type realClock struct{}
+
+// NewRealClock returns the production clock used by backend infrastructure.
+// The concrete adapter stays private so application code depends on Clock.
+func NewRealClock() Clock {
+	return realClock{}
+}
 
 func (realClock) Now() time.Time {
 	return time.Now()

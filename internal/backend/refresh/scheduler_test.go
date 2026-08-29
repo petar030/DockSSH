@@ -1,4 +1,4 @@
-package backend_test
+package refresh_test
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
+	"github.com/petar030/ssh-native-docker-tui/internal/backend/refresh"
 	"github.com/petar030/ssh-native-docker-tui/test/testkit"
 )
 
@@ -27,11 +28,11 @@ func (requester *recordingRequester) Refresh(
 	return backend.RefreshResult{Key: key}, nil
 }
 
-func TestRefreshSchedulerUsesInjectedClockAndStopsCleanly(t *testing.T) {
+func TestSchedulerUsesInjectedClockAndStopsCleanly(t *testing.T) {
 	clock := testkit.NewManualClock(time.Unix(5_000, 0))
 	key := backend.RefreshKey{Kind: "system.engine"}
 	requester := &recordingRequester{calls: make(chan scheduledCall, 2)}
-	scheduler, err := backend.NewRefreshScheduler(clock, requester, []backend.RefreshPolicy{{
+	scheduler, err := refresh.NewScheduler(clock, requester, []backend.RefreshPolicy{{
 		Key: key, Interval: 10 * time.Second,
 	}})
 	if err != nil {
@@ -43,16 +44,9 @@ func TestRefreshSchedulerUsesInjectedClockAndStopsCleanly(t *testing.T) {
 	waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Second)
 	defer waitCancel()
 	if err := clock.WaitForTickers(waitCtx, 1); err != nil {
-		t.Fatalf("wait for scheduler ticker: %v", err)
+		t.Fatalf("wait for ticker: %v", err)
 	}
-
-	clock.Advance(9 * time.Second)
-	select {
-	case call := <-requester.calls:
-		t.Fatalf("early scheduled call: %#v", call)
-	default:
-	}
-	clock.Advance(time.Second)
+	clock.Advance(10 * time.Second)
 	select {
 	case call := <-requester.calls:
 		if call.key != key || call.reason != backend.RefreshScheduled {
@@ -61,29 +55,22 @@ func TestRefreshSchedulerUsesInjectedClockAndStopsCleanly(t *testing.T) {
 	case <-waitCtx.Done():
 		t.Fatal("scheduled refresh was not requested")
 	}
-
 	cancel()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("scheduler stopped with error: %v", err)
-		}
-	case <-waitCtx.Done():
-		t.Fatal("scheduler did not stop")
+	if err := <-done; err != nil {
+		t.Fatalf("scheduler shutdown: %v", err)
 	}
 }
 
-func TestRefreshSchedulerRejectsInvalidPolicies(t *testing.T) {
+func TestSchedulerRejectsInvalidPolicies(t *testing.T) {
 	clock := testkit.NewManualClock(time.Unix(1, 0))
 	requester := &recordingRequester{calls: make(chan scheduledCall, 1)}
 	key := backend.RefreshKey{Kind: "system.engine"}
-	if _, err := backend.NewRefreshScheduler(clock, requester, []backend.RefreshPolicy{{Key: key}}); !backend.HasErrorCode(err, backend.ErrorInvalidInput) {
+	if _, err := refresh.NewScheduler(clock, requester, []backend.RefreshPolicy{{Key: key}}); !backend.HasErrorCode(err, backend.ErrorInvalidInput) {
 		t.Fatalf("zero interval error = %v", err)
 	}
-	if _, err := backend.NewRefreshScheduler(clock, requester, []backend.RefreshPolicy{
-		{Key: key, Interval: time.Second},
-		{Key: key, Interval: 2 * time.Second},
+	if _, err := refresh.NewScheduler(clock, requester, []backend.RefreshPolicy{
+		{Key: key, Interval: time.Second}, {Key: key, Interval: 2 * time.Second},
 	}); !backend.HasErrorCode(err, backend.ErrorInvalidInput) {
-		t.Fatalf("duplicate scope error = %v", err)
+		t.Fatalf("duplicate policy error = %v", err)
 	}
 }

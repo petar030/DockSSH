@@ -62,6 +62,15 @@ test-first backend and its Docker integration.
 
 ## System shape
 
+The following diagram is the intended communication shape. It distinguishes the
+two responsibilities that can otherwise look similar in code: the **Event Hub**
+delivers page updates to sessions, while the **Backend** receives direct
+commands/refresh requests, performs or requests work, and publishes the
+resulting observations. An Event Bus never invokes Docker and never refreshes a
+TUI by itself; a TUI redraws only after its own session receives an update.
+
+![Backend request and Event Hub delivery paths](<Design/ChatGPT Image Aug 29, 2026, 05_05_15 PM.png>)
+
 ```text
 INITIAL OR MANUAL PAGE REFRESH
 
@@ -70,10 +79,10 @@ SSH session                 Backend process                         Docker
 
 1. Subscribe to page ─────> Containers Event Bus
 
-2. Refresh(Containers) ───> Core
+2. Refresh(Containers) ───> Backend facade
                               │
                               v
-                         RefreshCoordinator
+                         Refresh catalog/coordinator
                               │ selects the Containers loader
                               v
                          Container loader ──> shared Moby client ──> Engine
@@ -94,7 +103,7 @@ Containers().Start(id) ───> Container service ─> shared Moby client ─>
                                   └──── after successful command <───────┘
                                                  │
                                                  v
-                                        RefreshCoordinator
+                                        Refresh catalog/coordinator
                                                  │ fresh Docker read
                                                  v
                                         Containers Event Bus
@@ -103,10 +112,43 @@ Containers().Start(id) ───> Container service ─> shared Moby client ─>
                                       every session viewing Containers
 ```
 
-The scheduler, Docker-event listener, and completed jobs enter at the same
-`RefreshCoordinator` step. The coordinator handles only refresh reads and event
-publication; domain services execute commands. Each session listens only to its
-active page bus and owns the data it renders.
+The scheduler, Backend-owned Docker-event listener, and completed jobs enter at
+the same refresh-catalog step. The coordinator handles only refresh reads and
+Event Hub publication; domain services execute commands. Each session listens
+only to its active page bus and owns the data it renders.
+
+## Code organization
+
+The runtime behavior above is deliberately separate from how the Go files are
+organized. The codebase keeps these responsibilities distinct:
+
+- `internal/backend` defines the stable application contracts shared by the
+  TUI, page packages, and infrastructure: pages, events, refresh identities,
+  errors, clocks, and the public `Backend` interface.
+- A page package such as `internal/backend/dashboard` owns only its page DTOs
+  and Docker-backed loader. Future tabs follow that same shape.
+- The Event Hub owns page Event Buses, subscriptions, bounded delivery, and
+  recent Docker-event history. It is a transport and history component, not a
+  refresh executor and not a UI state store.
+- The refresh catalog/coordinator owns the mapping from refresh work to a page
+  loader and turns a completed authoritative load into a typed page update.
+- The Backend owns the process-wide Docker-event listener alongside its direct
+  command and refresh entry points. When the listener receives a normalized
+  daemon event, the Backend publishes that raw observation to the Events page
+  through the Event Hub and independently requests refreshes for Dashboard and
+  other affected pages. Publishing to `PageEvents` is not how Dashboard is
+  refreshed.
+- The runtime Backend facade owns composition, lifecycle, direct routing of
+  client calls, and Docker-event handling. It contains no rendered resource
+  state or general resource cache. Future domain command services are direct
+  Backend APIs; after success they request refreshes through the refresh
+  catalog, whose typed results are published through the Event Hub.
+
+The implemented packages are `backend/eventhub`, `backend/refresh`, and
+`backend/runtime`. This separation is a code-organization rule, not a different
+architecture. The public behavior, direct-refresh model, page buses, refresh
+triggers, Docker-event mapping, and state ownership described in this plan
+remain the same.
 
 ## State ownership
 
@@ -115,7 +157,7 @@ active page bus and owns the data it renders.
 | Containers, images, volumes, networks, and Engine facts | Docker Engine | Docker-managed |
 | Currently rendered resource data | Each TUI session | Session/view lifetime |
 | Active refresh contexts | Backend | Duration of each refresh |
-| Recent normalized Docker events | Backend Event Buffer | Bounded process lifetime |
+| Recent normalized Docker events | Event Hub history | Bounded process lifetime |
 | Subscription queues | Relevant page Event Bus | Subscription lifetime |
 | Logs, stats, exec, and job progress | Initiating session | Stream/job lifetime |
 
@@ -271,11 +313,12 @@ RPC mechanism:
 commands and refreshes remain direct calls so context cancellation, errors, and
 results return to the initiating session predictably.
 
-### RefreshCoordinator
+### Refresh catalog and coordinator
 
-The coordinator turns an internal keyed refresh request into a Docker/Compose load and a typed
-update event. Its loader registry maps each `RefreshKind` to its page and loader;
-the complete `RefreshKey`, including its optional ID, is passed to that loader.
+The catalog is a routing table that maps each `RefreshKind` to its page and
+loader; it stores no loaded Docker data. The coordinator turns a keyed refresh
+request into a Docker/Compose load and a typed update event. The complete
+`RefreshKey`, including its optional ID, is passed to that loader.
 
 For each request it:
 
@@ -300,14 +343,14 @@ known Docker event/command. The first implementation may refresh base topics
 even with no subscribers; interest-aware scheduling is a later optimization.
 All timing is injectable and deterministic in unit tests.
 
-### Docker event listener and event buffer
+### Backend Docker-event listener and Event Hub history
 
-One process-wide listener consumes the Engine event stream. It reconnects after
-transient stream failures and never opens more than one stream at a time. Each
-event is normalized once, added to the bounded recent-event ring, published as
-`DockerEventObserved`, and mapped to affected refresh keys. The listener
-requests those refreshes through the same coordinator used by every other
-trigger.
+The Backend owns one process-wide listener that consumes the Engine event
+stream. It reconnects after transient stream failures and never opens more than
+one stream at a time. Each event is normalized once, published by the Backend
+to the Event Hub's Events-page bus, added to bounded Event Hub history, and
+mapped to affected refresh keys. The Backend requests those refreshes through
+the same coordinator used by every other trigger.
 
 An Engine event is a hint to reload authoritative state, not itself the final UI
 state. Each mapped refresh performs a new read; occasional duplicate reads are

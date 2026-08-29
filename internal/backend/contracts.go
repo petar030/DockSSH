@@ -77,6 +77,25 @@ type RefreshResult struct {
 	PublishedAt time.Time
 }
 
+// RefreshLoader performs one authoritative read and returns a complete typed
+// page update. Loaders never publish events themselves.
+type RefreshLoader interface {
+	Load(context.Context, RefreshKey) (EventPayload, error)
+}
+
+type RefreshLoaderFunc func(context.Context, RefreshKey) (EventPayload, error)
+
+func (loader RefreshLoaderFunc) Load(ctx context.Context, key RefreshKey) (EventPayload, error) {
+	return loader(ctx, key)
+}
+
+// RefreshPolicy schedules one process-wide refresh independently of session
+// count.
+type RefreshPolicy struct {
+	Key      RefreshKey
+	Interval time.Duration
+}
+
 // EventType identifies a typed Event Bus payload.
 type EventType string
 
@@ -112,7 +131,8 @@ type BackendStatusUpdated struct {
 
 func (BackendStatusUpdated) EventType() EventType { return EventBackendStatusUpdated }
 
-// DockerEventObserved is one normalized Engine event retained by EventBuffer.
+// DockerEventObserved is one normalized Engine event retained by bounded event
+// history and published to the Events page.
 type DockerEventObserved struct {
 	OccurredAt time.Time
 	Resource   string
@@ -127,6 +147,17 @@ func (DockerEventObserved) EventType() EventType { return EventDockerObserved }
 func (event DockerEventObserved) CloneEventPayload() EventPayload {
 	event.Attributes = cloneAttributes(event.Attributes)
 	return event
+}
+
+func cloneAttributes(attributes map[string]string) map[string]string {
+	if attributes == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(attributes))
+	for key, value := range attributes {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 // RefreshFailed tells observers that their existing local data may be stale.

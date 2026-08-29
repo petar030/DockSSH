@@ -14,6 +14,9 @@ import (
 	"github.com/moby/moby/client"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/dashboard"
+	"github.com/petar030/ssh-native-docker-tui/internal/backend/eventhub"
+	"github.com/petar030/ssh-native-docker-tui/internal/backend/refresh"
+	backendruntime "github.com/petar030/ssh-native-docker-tui/internal/backend/runtime"
 )
 
 // Dependencies groups the SDK objects shared by backend services. Bootstrap
@@ -59,21 +62,20 @@ func (dependencies Dependencies) UsesSharedClient() bool {
 		dependencies.DockerCLI.Client() == dependencies.Client
 }
 
-// EngineEvent is the supported Moby event message used by the future event
-// normalizer.
+// EngineEvent is the Moby event message accepted by the event normalizer.
 type EngineEvent = events.Message
 
 // BackendConfig controls the production shared backend foundation.
 type BackendConfig struct {
-	Endpoint            string
-	Clock               backend.Clock
-	EventBufferCapacity int
-	RefreshPolicies     []backend.RefreshPolicy
+	Endpoint             string
+	Clock                backend.Clock
+	EventHistoryCapacity int
+	RefreshPolicies      []backend.RefreshPolicy
 }
 
 // Application retains all SDK handles while exposing the shared backend API.
 type Application struct {
-	*backend.Core
+	*backendruntime.Backend
 	dependencies Dependencies
 }
 
@@ -84,22 +86,30 @@ func NewBackend(ctx context.Context, config BackendConfig) (*Application, error)
 	if err != nil {
 		return nil, err
 	}
-	if config.EventBufferCapacity == 0 {
-		config.EventBufferCapacity = 256
+	if config.EventHistoryCapacity == 0 {
+		config.EventHistoryCapacity = 256
 	}
 
-	registry := backend.NewLoaderRegistry()
-	eventBuffer := backend.NewEventBuffer(config.EventBufferCapacity)
-	dashboardLoader, err := dashboard.NewLoader(dependencies.Client, eventBuffer)
+	clock := config.Clock
+	if clock == nil {
+		clock = backend.NewRealClock()
+	}
+	events := eventhub.New(eventhub.Config{
+		Clock: clock, EventHistoryCapacity: config.EventHistoryCapacity,
+	})
+	dashboardLoader, err := dashboard.NewLoader(dependencies.Client, events)
 	if err != nil {
+		_ = events.Close()
 		_ = dependencies.Client.Close()
 		return nil, err
 	}
-	if err := registry.RegisterPageRefresh(backend.PageDashboard, dashboard.RefreshKindSummary, dashboardLoader); err != nil {
+	catalog := refresh.NewCatalog()
+	if err := catalog.RegisterPage(backend.PageDashboard, dashboard.RefreshKindSummary, dashboardLoader); err != nil {
+		_ = events.Close()
 		_ = dependencies.Client.Close()
 		return nil, err
 	}
-	if err := registry.RegisterPageRefresh(backend.PageSystem, backend.RefreshKindBackendStatus, backend.RefreshLoaderFunc(func(ctx context.Context, _ backend.RefreshKey) (backend.EventPayload, error) {
+	if err := catalog.RegisterPage(backend.PageSystem, backend.RefreshKindBackendStatus, backend.RefreshLoaderFunc(func(ctx context.Context, _ backend.RefreshKey) (backend.EventPayload, error) {
 		result, err := dependencies.Client.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true})
 		if err != nil {
 			return nil, err
@@ -108,27 +118,33 @@ func NewBackend(ctx context.Context, config BackendConfig) (*Application, error)
 			APIVersion: result.APIVersion, OSType: result.OSType, Experimental: result.Experimental,
 		}, nil
 	})); err != nil {
+		_ = events.Close()
+		_ = dependencies.Client.Close()
+		return nil, err
+	}
+	refreshes, err := refresh.NewCoordinator(refresh.CoordinatorConfig{
+		Publisher: events, Catalog: catalog,
+	})
+	if err != nil {
+		_ = events.Close()
 		_ = dependencies.Client.Close()
 		return nil, err
 	}
 
 	eventSource := newMobyEventSource(dependencies.Client)
-	core, err := backend.NewCore(ctx, backend.CoreConfig{
-		Clock:             config.Clock,
-		Loaders:           registry,
-		RefreshPolicies:   config.RefreshPolicies,
-		EventBuffer:       eventBuffer,
-		DockerEvents:      eventSource,
+	applicationBackend, err := backendruntime.New(ctx, backendruntime.Config{
+		Clock: clock, EventHub: events, Refreshes: refreshes,
+		RefreshPolicies: config.RefreshPolicies, DockerEvents: eventSource,
 		OwnedDockerClient: dependencies.Client,
 	})
 	if err != nil {
 		return nil, err
 	}
 	if err := eventSource.waitReady(ctx); err != nil {
-		_ = core.Close(context.Background())
+		_ = applicationBackend.Close(context.Background())
 		return nil, err
 	}
-	return &Application{Core: core, dependencies: dependencies}, nil
+	return &Application{Backend: applicationBackend, dependencies: dependencies}, nil
 }
 
 func (application *Application) UsesSharedMobyClient() bool {

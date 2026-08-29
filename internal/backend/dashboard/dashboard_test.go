@@ -11,10 +11,11 @@ import (
 	"github.com/moby/moby/api/types/volume"
 	"github.com/moby/moby/client"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
+	"github.com/petar030/ssh-native-docker-tui/internal/backend/eventhub"
 )
 
 func TestLoaderReturnsCompleteDashboardSummary(t *testing.T) {
-	history := backend.NewEventBuffer(4)
+	history := eventhub.NewHistory(4)
 	eventTime := time.Unix(1_700_000_000, 0)
 	history.Add(backend.EventEnvelope{
 		Time: eventTime,
@@ -68,7 +69,7 @@ func TestLoaderReturnsCompleteDashboardSummary(t *testing.T) {
 
 func TestLoaderReturnsDockerFailure(t *testing.T) {
 	docker := &fakeDockerReader{pingErr: errors.New("daemon unavailable")}
-	loader, err := NewLoader(docker, backend.NewEventBuffer(1))
+	loader, err := NewLoader(docker, eventhub.NewHistory(1))
 	if err != nil {
 		t.Fatalf("new loader: %v", err)
 	}
@@ -78,7 +79,7 @@ func TestLoaderReturnsDockerFailure(t *testing.T) {
 }
 
 func TestSummaryPayloadIsCopiedForEachSubscriber(t *testing.T) {
-	bus := backend.NewEventBus(backend.EventBusConfig{})
+	bus := eventhub.NewBus(eventhub.BusConfig{})
 	first, err := bus.Subscribe(context.Background(), backend.EventFilter{})
 	if err != nil {
 		t.Fatalf("subscribe first: %v", err)

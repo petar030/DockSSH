@@ -9,8 +9,8 @@ import (
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/dashboard"
 )
 
-// RunCoreConformance executes behavior shared by every production backend.
-func RunCoreConformance(t *testing.T, factory BackendFactory, env IntegrationEnvironment) {
+// RunBackendConformance executes behavior shared by every production backend.
+func RunBackendConformance(t *testing.T, factory BackendFactory, env IntegrationEnvironment) {
 	t.Helper()
 	if factory == nil {
 		t.Fatal("backendtest: nil BackendFactory")
