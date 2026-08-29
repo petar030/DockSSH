@@ -1,9 +1,8 @@
-// Package containers implements the read models, commands, and session-owned
+// Package containers implements the page API, typed updates and session-owned
 // streams used by the Containers tab.
 package containers
 
 import (
-	"context"
 	"time"
 
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
@@ -18,33 +17,6 @@ const (
 	EventDetailsUpdated   backend.EventType = "container_details_updated"
 	EventProcessesUpdated backend.EventType = "container_processes_updated"
 )
-
-// Backend is the complete application contract required by the Containers tab.
-type Backend interface {
-	backend.Backend
-	Containers() API
-}
-
-// API contains direct Container requests. The base list is loaded through
-// backend.Refresh(PageContainers); details and processes publish typed page
-// updates, while commands and streams return directly to the initiating TUI.
-type API interface {
-	RefreshDetails(context.Context, string) error
-	RefreshProcesses(context.Context, string) error
-
-	Start(context.Context, string) (backend.CommandResult, error)
-	Stop(context.Context, string, StopOptions) (backend.CommandResult, error)
-	Restart(context.Context, string, RestartOptions) (backend.CommandResult, error)
-	Pause(context.Context, string) (backend.CommandResult, error)
-	Unpause(context.Context, string) (backend.CommandResult, error)
-	Kill(context.Context, string, KillOptions) (backend.CommandResult, error)
-	Rename(context.Context, string, RenameOptions) (backend.CommandResult, error)
-	Remove(context.Context, string, RemoveOptions) (backend.CommandResult, error)
-
-	Exec(context.Context, string, ExecOptions) (ExecResult, error)
-	Logs(context.Context, string, LogsOptions) (backend.Stream[LogEntry], error)
-	Stats(context.Context, string, StatsOptions) (backend.Stream[StatsSample], error)
-}
 
 // Filter is session-local Containers-list filtering criteria. The backend
 // publishes the authoritative list; each TUI applies its own filter.
@@ -188,21 +160,6 @@ type RenameOptions struct {
 type RemoveOptions struct {
 	Force         bool
 	RemoveVolumes bool
-}
-
-type ExecOptions struct {
-	Command     []string
-	User        string
-	WorkingDir  string
-	Environment []string
-	Privileged  bool
-}
-
-type ExecResult struct {
-	ExecID   string
-	ExitCode int
-	Stdout   string
-	Stderr   string
 }
 
 type LogsOptions struct {

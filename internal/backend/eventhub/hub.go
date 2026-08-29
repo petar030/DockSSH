@@ -25,7 +25,7 @@ type Config struct {
 }
 
 // Hub owns every page bus and the bounded normalized Docker-event history.
-// It delivers observations but never invokes page loaders or Docker APIs.
+// It delivers observations but never invokes page refresh handlers or Docker APIs.
 type Hub struct {
 	buses   map[backend.Page]*Bus
 	history *History

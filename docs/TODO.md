@@ -11,8 +11,9 @@ TODO list for development
 - [x] Replace snapshot contracts with flat refresh keys and typed full-result update events
 - [x] Remove `StateStore`, snapshot versions, stale-cache metadata, and snapshot query methods
 - [x] Implement a separate Event Bus per page with filtering, ordering, bounded delivery, cancellation, and overflow recovery
-- [x] Implement direct RefreshCoordinator loads with page routing, failure publication, cancellation, and no coalescing/debounce state
-- [x] Move command and Docker-event page refreshes onto one bounded backend-owned dispatcher while keeping explicit refresh synchronous
+- [x] Implement one backend-owned Refresh Manager with page routing, exact-key pending deduplication, failure publication, timeouts, and cancellation
+- [x] Route explicit, scheduled, command, and Docker-event refreshes through the same bounded Refresh Manager
+- [x] Implement the bounded backend-owned command queue and fixed worker pool
 - [x] Keep and adapt the deterministic fake clock, scheduler, Docker adapter, and synchronization utilities
 - [x] Keep the bounded recent Docker-event buffer as event history, not resource state
 - [x] Update application bootstrap and preserve single ownership of shared Docker/Compose dependencies
@@ -43,7 +44,6 @@ TODO list for development
 - [x] Test and implement the container details window
 - [x] Test and implement the container processes window
 - [x] Test and implement start, stop, restart, pause, unpause, kill, rename, and remove actions
-- [x] Test and implement one-shot container exec
 - [x] Test and implement container logs and stats windows
 - [x] Verify command-triggered and Docker-event-triggered container refreshes
 

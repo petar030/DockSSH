@@ -1,10 +1,11 @@
 // Package docker wires the external SDK handles owned by application bootstrap
-// and provides Docker-backed loaders to the shared backend.
+// and injects them into the shared backend and page APIs.
 package docker
 
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/docker/cli/cli/command"
 	cliflags "github.com/docker/cli/cli/flags"
@@ -16,7 +17,6 @@ import (
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/dashboard"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/eventhub"
-	"github.com/petar030/ssh-native-docker-tui/internal/backend/refresh"
 	backendruntime "github.com/petar030/ssh-native-docker-tui/internal/backend/runtime"
 )
 
@@ -72,6 +72,11 @@ type BackendConfig struct {
 	Clock                backend.Clock
 	EventHistoryCapacity int
 	RefreshPolicies      []backend.RefreshPolicy
+	RefreshPending       int
+	RefreshTimeout       time.Duration
+	CommandWorkers       int
+	CommandQueue         int
+	CommandTimeout       time.Duration
 }
 
 // Application retains all SDK handles while exposing the shared backend API.
@@ -98,40 +103,58 @@ func NewBackend(ctx context.Context, config BackendConfig) (*Application, error)
 	events := eventhub.New(eventhub.Config{
 		Clock: clock, EventHistoryCapacity: config.EventHistoryCapacity,
 	})
-	dashboardLoader, err := dashboard.NewLoader(dependencies.Client, events)
+	refreshes, err := backendruntime.NewRefreshManager(backendruntime.RefreshManagerConfig{
+		Publisher: events, PendingCapacity: config.RefreshPending, Timeout: config.RefreshTimeout,
+	})
 	if err != nil {
 		_ = events.Close()
 		_ = dependencies.Client.Close()
 		return nil, err
 	}
-	catalog := refresh.NewCatalog()
-	if err := catalog.RegisterPage(backend.PageDashboard, dashboard.RefreshKindSummary, dashboardLoader); err != nil {
-		_ = events.Close()
-		_ = dependencies.Client.Close()
-		return nil, err
-	}
-	containersLoader, err := containers.NewLoader(dependencies.Client)
+	commands, err := backendruntime.NewCommandExecutor(backendruntime.CommandExecutorConfig{
+		Refreshes: refreshes, Workers: config.CommandWorkers,
+		QueueCapacity: config.CommandQueue, Timeout: config.CommandTimeout,
+	})
 	if err != nil {
+		_ = refreshes.Close(context.Background())
 		_ = events.Close()
 		_ = dependencies.Client.Close()
 		return nil, err
 	}
-	if err := catalog.RegisterPage(backend.PageContainers, containers.RefreshKindList, containersLoader); err != nil {
+	cleanup := func() {
+		_ = commands.Close(context.Background())
+		_ = refreshes.Close(context.Background())
 		_ = events.Close()
 		_ = dependencies.Client.Close()
+	}
+
+	dashboardAPI, err := dashboard.NewAPI(dependencies.Client, events)
+	if err != nil {
+		cleanup()
 		return nil, err
 	}
-	if err := catalog.Register(backend.PageContainers, containers.RefreshKindDetails, containersLoader); err != nil {
-		_ = events.Close()
-		_ = dependencies.Client.Close()
+	if err := refreshes.RegisterPage(backend.PageDashboard, dashboard.RefreshKindSummary, dashboardAPI.ReadRefresh); err != nil {
+		cleanup()
 		return nil, err
 	}
-	if err := catalog.Register(backend.PageContainers, containers.RefreshKindProcesses, containersLoader); err != nil {
-		_ = events.Close()
-		_ = dependencies.Client.Close()
+	containersAPI, err := containers.NewAPI(dependencies.Client, commands, refreshes)
+	if err != nil {
+		cleanup()
 		return nil, err
 	}
-	if err := catalog.RegisterPage(backend.PageSystem, backend.RefreshKindBackendStatus, backend.RefreshLoaderFunc(func(ctx context.Context, _ backend.RefreshKey) (backend.EventPayload, error) {
+	if err := refreshes.RegisterPage(backend.PageContainers, containers.RefreshKindList, containersAPI.ReadRefresh); err != nil {
+		cleanup()
+		return nil, err
+	}
+	if err := refreshes.Register(backend.PageContainers, containers.RefreshKindDetails, containersAPI.ReadRefresh); err != nil {
+		cleanup()
+		return nil, err
+	}
+	if err := refreshes.Register(backend.PageContainers, containers.RefreshKindProcesses, containersAPI.ReadRefresh); err != nil {
+		cleanup()
+		return nil, err
+	}
+	if err := refreshes.RegisterPage(backend.PageSystem, backend.RefreshKindBackendStatus, func(ctx context.Context, _ backend.RefreshKey) (backend.EventPayload, error) {
 		result, err := dependencies.Client.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true})
 		if err != nil {
 			return nil, err
@@ -139,41 +162,16 @@ func NewBackend(ctx context.Context, config BackendConfig) (*Application, error)
 		return backend.BackendStatusUpdated{
 			APIVersion: result.APIVersion, OSType: result.OSType, Experimental: result.Experimental,
 		}, nil
-	})); err != nil {
-		_ = events.Close()
-		_ = dependencies.Client.Close()
-		return nil, err
-	}
-	refreshes, err := refresh.NewCoordinator(refresh.CoordinatorConfig{
-		Publisher: events, Catalog: catalog,
-	})
-	if err != nil {
-		_ = events.Close()
-		_ = dependencies.Client.Close()
-		return nil, err
-	}
-	dispatcher, err := backendruntime.NewRefreshDispatcher(refreshes)
-	if err != nil {
-		_ = refreshes.Shutdown(context.Background())
-		_ = events.Close()
-		_ = dependencies.Client.Close()
-		return nil, err
-	}
-	containersService, err := containers.NewService(dependencies.Client, refreshes, dispatcher)
-	if err != nil {
-		_ = dispatcher.Close()
-		_ = refreshes.Shutdown(context.Background())
-		_ = events.Close()
-		_ = dependencies.Client.Close()
+	}); err != nil {
+		cleanup()
 		return nil, err
 	}
 
 	eventSource := newMobyEventSource(dependencies.Client)
 	applicationBackend, err := backendruntime.New(ctx, backendruntime.Config{
-		Clock: clock, EventHub: events, Refreshes: refreshes,
-		RefreshDispatcher: dispatcher,
-		RefreshPolicies:   config.RefreshPolicies, DockerEvents: eventSource,
-		OwnedDockerClient: dependencies.Client, Containers: containersService,
+		Clock: clock, EventHub: events, Refreshes: refreshes, Commands: commands,
+		RefreshPolicies: config.RefreshPolicies, DockerEvents: eventSource,
+		OwnedDockerClient: dependencies.Client, Containers: containersAPI,
 	})
 	if err != nil {
 		return nil, err
@@ -190,4 +188,3 @@ func (application *Application) UsesSharedMobyClient() bool {
 }
 
 var _ backend.Backend = (*Application)(nil)
-var _ containers.Backend = (*Application)(nil)

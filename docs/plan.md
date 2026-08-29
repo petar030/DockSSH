@@ -1,243 +1,130 @@
 # SSH-Native Docker TUI — Project Plan
 
-This file is the permanent architectural source of truth for the project.
+This file is the permanent architectural source of truth. `docs/TODO.md` is the
+ordered product roadmap, and `docs/testing.md` defines verification rules.
 
 ## Project goal
 
 Build an SSH-accessible terminal UI for managing the Docker Engine on the same
-server as the application. Multiple SSH sessions may use the backend at once.
-The first version manages only that local Engine; it does not connect to remote
-Docker hosts.
+server as the application. Multiple SSH sessions share one in-process backend
+and one Docker/Compose integration. The first version manages only that local
+Engine.
 
-The backend is a modular Go monolith. It owns Docker and Compose integrations,
-executes refreshes and commands, and broadcasts fresh results through the bus
-for the relevant page. The TUI is a client of that backend and never imports
-Docker SDK types directly.
+The application is a modular Go monolith. Docker is the authoritative resource
+state. The backend coordinates operations and typed notifications but does not
+maintain a second cache of Docker resource snapshots. Each TUI session owns the
+data it renders.
 
-## Architecture decisions
+## TUI and SSH stack
 
-- Use one shared Moby client per application process.
-- Use the Docker CLI object and Compose v2 Go packages in process; do not shell
-  out to `docker` or `docker compose`.
-- Docker Engine is the authoritative state store.
-- Do not maintain a second general-purpose backend cache of resource snapshots.
-- Each connected TUI session is an observer and owns the data it renders.
-- Every explicit refresh request performs a new authoritative read. Automatic
-  command and Docker-event page triggers pass through one bounded dispatcher;
-  repeated triggers for a page collapse only while that page is pending.
-- Each TUI tab has its own Event Bus. A session subscribes only to the bus for
-  its active page and closes that subscription when it leaves the page.
-- A process-wide scheduler may request periodic refreshes. Sessions do not run
-  independent polling loops.
-- Manual and scheduled refreshes call the coordinator directly. Docker events
-  and successful short commands mark affected pages in the process-wide
-  dispatcher, whose worker calls that same coordinator.
-- Commands and refresh requests are direct backend calls. Page Event Buses carry
-  observations/results, not commands requiring a synchronous answer.
-- Logs, stats, progress, and a future interactive terminal are session-owned
-  streams. They are neither cached nor globally broadcast.
-- The SSH boundary is an application boundary, not an HTTP boundary. No REST API
-  is required between the TUI and backend.
-
-## SSH and TUI requirements
-
-The final application remains a single Go process with one shared backend and
-one independent TUI model per connected SSH session. The planned UI stack is:
-
-- [Wish](https://github.com/charmbracelet/wish) for the SSH server, middleware,
-  and session lifecycle;
-- [Bubble Tea](https://github.com/charmbracelet/bubbletea) for each session's
-  model/update/view loop;
-- [Bubbles](https://github.com/charmbracelet/bubbles) for reusable components
-  such as tables, lists, text inputs, viewports, and spinners;
-- [Lip Gloss](https://github.com/charmbracelet/lipgloss) for terminal layout and
+- [Wish](https://github.com/charmbracelet/wish) provides the SSH server,
+  middleware and session lifecycle.
+- [Bubble Tea](https://github.com/charmbracelet/bubbletea) provides one
+  independent `tea.Program` per SSH session.
+- [Bubbles](https://github.com/charmbracelet/bubbles) provides reusable TUI
+  components.
+- [Lip Gloss](https://github.com/charmbracelet/lipgloss) provides layout and
   styling.
 
-Wish creates a separate Bubble Tea program for every SSH connection. Each
-program owns its active tab, selected row, filters, modal state, terminal size,
-rendered backend data, and session-owned streams. It talks only to the in-process
-`Backend` interface; it never imports the Moby or Compose SDKs.
+These dependencies are added when TUI implementation starts. Each Bubble Tea
+model owns its active page, selected row, filters, modal state, terminal size,
+rendered backend data, subscriptions and session-owned streams. TUI code uses
+the application Backend API and never imports Docker SDK types.
 
-These libraries are architectural requirements, but they are not added to
-`go.mod` until TUI implementation begins. The current milestone remains the
-test-first backend and its Docker integration.
+Wish and Bubble Tea may use several goroutines per session. Architecture does
+not rely on their exact goroutine count; it relies on context ownership.
 
-## System shape
+## Process, goroutine and context ownership
 
-The following diagram is the intended communication shape. It distinguishes the
-two responsibilities that can otherwise look similar in code: the **Event Hub**
-delivers page updates to sessions, while the **Backend** receives direct
-commands/refresh requests, performs or requests work, and publishes the
-resulting observations. An Event Bus never invokes Docker and never refreshes a
-TUI by itself; a TUI redraws only after its own session receives an update.
-
-![Backend request and Event Hub delivery paths](<Design/ChatGPT Image Aug 29, 2026, 05_05_15 PM.png>)
+The SSH server, TUI programs and backend all run in one Go OS process. The
+Docker daemon is a different OS process.
 
 ```text
-INITIAL OR MANUAL PAGE REFRESH
-
-SSH session                 Backend process                         Docker
------------                 ---------------                         ------
-
-1. Subscribe to page ─────> Containers Event Bus
-
-2. Refresh(Containers) ───> Backend facade
-                              │
-                              v
-                         Refresh catalog/coordinator
-                              │ selects the Containers loader
-                              v
-                         Container loader ──> shared Moby client ──> Engine
-                              ^                                        │
-                              └────────── Docker response ─────────────┘
-                              │
-                              v
-                         Containers Event Bus ── typed update ──> SSH session
-
-
-CONTAINER COMMAND
-
-SSH session                 Backend process                         Docker
------------                 ---------------                         ------
-
-Containers().Start(id) ───> Container service ─> shared Moby client ─> Engine
-                                  │                                      │
-                                  └──── after successful command <───────┘
-                                                 │
-                                                 v
-                                        Refresh dispatcher
-                                        (backend lifetime)
-                                                 │
-                                                 v
-                                        Refresh catalog/coordinator
-                                                 │ fresh Docker read
-                                                 v
-                                        Containers Event Bus
-                                                 │
-                                                 v
-                                      every session viewing Containers
+┌──────────────────────────── ONE APPLICATION OS PROCESS ────────────────────────────┐
+│                                                                                    │
+│  SSH/TUI session A              SSH/TUI session B                                  │
+│  Wish + tea.Program             Wish + tea.Program                                 │
+│  session context                session context                                    │
+│          │                              │                                           │
+│          └──────────────┬───────────────┘                                           │
+│                         v                                                           │
+│                 Shared Backend facade                                              │
+│                    │       │       │                                                │
+│        Subscribe ──┘       │       └── page API calls                              │
+│                            │                                                        │
+│                 RequestRefresh                                                     │
+│                            v                                                        │
+│  ┌──────────────────────────────────────────────────────────────────────────────┐  │
+│  │ BACKEND-LIFETIME WORK                                                       │  │
+│  │                                                                             │  │
+│  │ Refresh Manager <── scheduler                                               │  │
+│  │       ^           <── Docker event listener                                 │  │
+│  │       └─────────── <── command completion                                   │  │
+│  │       │                                                                     │  │
+│  │       └── page API ReadRefresh ──────┐                                      │  │
+│  │                                      v                                      │  │
+│  │ Bounded Command Executor ─────> shared Moby client                          │  │
+│  │ fixed worker pool                    │                                      │  │
+│  └──────────────────────────────────────┼──────────────────────────────────────┘  │
+│                                         │                                         │
+│  Event Hub page buses ── typed events ──┼──> matching TUI subscriptions           │
+│                                         │                                         │
+│  SESSION-LIFETIME WORK                  │                                         │
+│  logs/stats stream ─────────────────────┘                                         │
+│                                                                                    │
+└─────────────────────────────────────────┼──────────────────────────────────────────┘
+                                          │ Docker endpoint
+                                          v
+                               ┌──────────────────────────┐
+                               │ DOCKER DAEMON OS PROCESS │
+                               │ authoritative resources  │
+                               └──────────────────────────┘
 ```
 
-The Backend-owned Docker-event listener and successful domain commands submit
-page triggers to the same dispatcher. The scheduler already runs under the
-backend lifecycle and may call the coordinator directly. The coordinator
-handles only refresh reads and Event Hub publication; domain services execute
-commands. Each session listens only to its active page bus and owns the data it
-renders.
+Context rules:
 
-## Code organization
+- the backend lifecycle ends only during application shutdown;
+- accepted commands and accepted refreshes use backend-owned contexts;
+- a session context controls how long that TUI waits for a command result;
+- subscriptions, logs and stats end with their owning page/session context;
+- application shutdown rejects new work, cancels workers and closes the shared
+  Docker client exactly once.
 
-The runtime behavior above is deliberately separate from how the Go files are
-organized. The codebase keeps these responsibilities distinct:
+## Stable architecture decisions
 
-- `internal/backend` defines the stable application contracts shared by the
-  TUI, page packages, and infrastructure: pages, events, refresh identities,
-  errors, clocks, and the public `Backend` interface.
-- A page package such as `internal/backend/dashboard` owns only its page DTOs
-  and Docker-backed loader. Future tabs follow that same shape.
-- The Event Hub owns page Event Buses, subscriptions, bounded delivery, and
-  recent Docker-event history. It is a transport and history component, not a
-  refresh executor and not a UI state store.
-- The refresh catalog/coordinator owns the mapping from refresh work to a page
-  loader and turns a completed authoritative load into a typed page update.
-- The runtime refresh dispatcher owns one bounded pending entry per page. It
-  converts command and Docker-event triggers into backend-lifetime coordinator
-  calls without storing Docker resource state.
-- The Backend owns the process-wide Docker-event listener alongside its direct
-  command and refresh entry points. When the listener receives a normalized
-  daemon event, the Backend publishes that raw observation to the Events page
-  through the Event Hub and independently requests refreshes for Dashboard and
-  other affected pages. Publishing to `PageEvents` is not how Dashboard is
-  refreshed.
-- The runtime Backend facade owns composition, lifecycle, direct routing of
-  client calls, Docker-event handling, and the refresh dispatcher. It contains
-  no rendered resource state or general resource cache. Future domain command
-  services are direct Backend APIs; after success they mark affected pages in
-  the dispatcher, whose typed refresh results are published through the Event
-  Hub.
+- Use one Moby client per application process.
+- Initialize the Docker CLI object with that same Moby client for Compose.
+- Use Compose v2 Go packages in process; never shell out to Docker commands.
+- Use one independent Event Bus per TUI page.
+- Subscribe before requesting a page's initial refresh.
+- Send refresh results as complete typed update events.
+- Keep only operational state: queues, pending refresh keys, subscriptions and
+  bounded recent Docker-event history.
+- Use no general-purpose Docker resource cache or snapshot store.
+- Use no HTTP/REST boundary between the TUI and backend.
+- Use no global serial command queue.
 
-The implemented packages are `backend/eventhub`, `backend/refresh`,
-`backend/runtime`, `backend/dashboard`, and `backend/containers`. This
-separation is a code-organization rule, not a different architecture.
+## Backend facade
 
-## State ownership
-
-| State | Owner | Lifetime |
-| --- | --- | --- |
-| Containers, images, volumes, networks, and Engine facts | Docker Engine | Docker-managed |
-| Currently rendered resource data | Each TUI session | Session/view lifetime |
-| Active refresh contexts | Backend | Duration of each refresh |
-| Pending automatic page-refresh flags | Runtime dispatcher | Until handled or backend shutdown |
-| Recent normalized Docker events | Event Hub history | Bounded process lifetime |
-| Subscription queues | Relevant page Event Bus | Subscription lifetime |
-| Logs, stats, exec, and job progress | Initiating session | Stream/job lifetime |
-
-The backend keeps only operational state needed for scheduling, cancellation,
-subscriptions, and the recent-event ring buffer. This is not a resource
-snapshot cache.
-
-Consequences:
-
-1. A successful refresh always emits a typed data update; there is no cached
-   previous value to compare against.
-2. An operationally failed refresh emits `RefreshFailed` on its page bus and
-   returns an error. Caller cancellation returns directly without broadcasting
-   a failure. Existing UI data remains visible because the session owns it.
-3. A newly opened view subscribes first and then requests an initial refresh,
-   preventing a subscribe/load race.
-4. If a subscriber falls behind, it receives an overflow/resync indication and
-   requests a fresh update for its visible view.
-
-## Shared dependency ownership
-
-Bootstrap creates and owns these process-wide dependencies:
-
-- one Moby `client.Client`, configured with Docker environment variables and API
-  version negotiation;
-- one Docker CLI object initialized from the same connection settings;
-- Compose services built from the Compose v2 Go packages;
-- one independent Event Bus for each TUI page;
-- one recent Docker-event buffer;
-- one refresh coordinator;
-- one bounded page refresh dispatcher;
-- one refresh scheduler;
-- one Docker event listener.
-
-Domain services receive shared dependencies through constructors. They must not
-create or close their own Moby clients. Application shutdown cancels producers,
-stops scheduling, closes subscriptions and streams, waits for owned goroutines,
-and closes the shared client exactly once.
-
-## Backend components
-
-### Backend facade
-
-The facade is the only entry point used by a TUI session. It groups the domain
-APIs and owns lifecycle:
+The process-wide facade is shared by every TUI session:
 
 ```go
 type Backend interface {
-    Refresh(context.Context, Page) error
+    RequestRefresh(Page) error
     Subscribe(context.Context, Page, EventFilter) (Subscription, error)
     Close(context.Context) error
 }
 ```
 
-Domain command and stream accessors are added when their slices freeze those
-contracts. Dashboard is read-only, so it needs no redundant domain accessor: its
-typed summary arrives through the shared page refresh and subscription methods.
-The facade must retain one shared refresh path, one observation path, and
-explicit lifecycle ownership.
+Domain accessors such as `Containers()` expose their page API. Dashboard is
+read-only and needs no separate public accessor because its data arrives from a
+page refresh subscription.
 
-The public `Refresh` operation requests the complete base refresh configured for
-the page. TUI sessions do not construct internal refresh keys or supply trigger
-reasons.
+`RequestRefresh` confirms that backend work was accepted. It does not wait for
+Docker. The typed success or `RefreshFailed` event arrives through that page's
+subscription.
 
 ### Client communication example
-
-When a session enters a page, it subscribes first and then requests that page's
-initial data. Later scheduler ticks, Docker events, successful commands, and
-completed jobs use internal refresh keys and publish through the same page bus:
 
 ```go
 subscription, err := appBackend.Subscribe(ctx, backend.PageContainers, backend.EventFilter{})
@@ -246,41 +133,20 @@ if err != nil {
 }
 defer subscription.Close()
 
-if err := appBackend.Refresh(ctx, backend.PageContainers); err != nil {
+if err := appBackend.RequestRefresh(backend.PageContainers); err != nil {
     return err
 }
 
 for event := range subscription.Events() {
-    // Replace this session's Containers view with the typed payload.
+    // Replace this session's visible Containers data with the typed payload.
 }
 ```
 
-### Internal refresh identity
+## Event Hub
 
-A refresh key is backend infrastructure. It mirrors the operation that will run
-instead of forcing every result into generic resource/view categories:
-
-```go
-type RefreshKind string
-
-type RefreshKey struct {
-    Kind RefreshKind
-    ID   string // optional container ID, project name, volume name, etc.
-}
-```
-
-Examples are `dashboard.summary`, `containers.list`, `container.details` with an
-ID, `compose.project` with a project name, and `system.disk-usage`. The page
-refresh configuration, domain services, scheduler, event listener, and jobs
-construct these keys; TUI sessions do not memorize their strings.
-
-`RefreshReason` records why work was requested: startup, scheduled, manual,
-Docker event, command completion, job completion, or overflow recovery.
-
-### Typed update events
-
-The Event Bus transports complete results, not “something changed” pointers
-back to a cache:
+The Event Hub contains one bounded, in-process bus for Dashboard, Containers,
+Compose, Images, Volumes, Networks, Events and System. Every subscription has
+its own filter, buffer, context and cleanup.
 
 ```go
 type EventEnvelope struct {
@@ -290,276 +156,276 @@ type EventEnvelope struct {
     Reason   RefreshReason
     Payload  EventPayload
 }
+```
 
-type EventPayload interface {
-    EventType() EventType
+Each bus provides page-local ordering, typed filtering and non-blocking
+broadcast. A slow subscriber receives `SubscriberOverflow` and requests an
+authoritative recovery refresh. The Event Hub never calls Docker, executes a
+command or starts a refresh.
+
+The Events bus also retains a bounded history of normalized Docker events. This
+is event history, not cached Docker resource state.
+
+## Refresh Manager
+
+One `RefreshManager` replaces separate catalog, coordinator and dispatcher
+objects. It owns:
+
+- refresh-handler and page-base-route registration;
+- one bounded FIFO list plus map of pending `RefreshKey` values;
+- exact-key deduplication;
+- one backend-owned worker;
+- per-read timeout and shutdown cancellation;
+- typed result or failure publication to the routed page Event Bus.
+
+Production defaults are 128 pending refresh keys and a 30-second read timeout;
+both are configurable at bootstrap.
+
+```go
+type RefreshKey struct {
+    Kind RefreshKind
+    ID   string
+}
+
+type RefreshHandler func(context.Context, RefreshKey) (EventPayload, error)
+```
+
+Examples include `dashboard.summary`, `containers.list`, and
+`container.details` with a container ID. Routing configuration stores
+functions, not loaded data.
+
+If repeated requests for the same key are pending, one read is sufficient. A
+request arriving while that key is actively being read leaves one additional
+refresh pending. Different IDs remain distinct. Pending work is bounded, and
+overflow or closed-manager requests return explicit errors.
+
+All refresh triggers use this one path:
+
+- page entry and manual refresh;
+- scheduler tick;
+- Docker event;
+- command attempt completion;
+- completed future job;
+- subscriber overflow recovery.
+
+The scheduler submits only configured base refresh keys. It does not inspect
+every individual resource periodically.
+
+## Command Executor
+
+Short mutating operations use one bounded FIFO queue and a fixed worker pool.
+This is concurrent backend ownership, not global serialization.
+
+```text
+TUI calls Containers().Start(waitCtx, id)
+    -> Containers API validates and builds a command request
+    -> Command Executor accepts it into the bounded channel
+    -> a fixed backend worker receives it in FIFO order
+    -> worker calls Docker using backend context and timeout
+    -> worker requests affected Refresh Manager keys
+    -> result is delivered if the initiating TUI still waits
+```
+
+Before queue acceptance, caller cancellation may prevent submission. After
+acceptance, session cancellation stops only that caller's wait; the backend
+operation continues. A buffered terminal-result channel prevents completion
+from blocking after disconnection.
+
+The queue has a fixed capacity. When full, submission returns a stable conflict
+or busy error. Independent commands run concurrently up to the fixed worker
+count. Docker Engine remains responsible for resource-level concurrency.
+Future Compose code may add narrow per-project conflict protection if real
+behavior requires it.
+
+Production defaults are four workers, 32 queued commands and a 30-second
+per-command timeout; all are configurable at bootstrap.
+
+After every attempted Docker mutation, including an ambiguous Docker error, the
+executor requests authoritative refreshes for the declared affected keys.
+Validation failures and queue rejection do not refresh because Docker was not
+called.
+
+## Page APIs and code organization
+
+Each page follows one consistent layout:
+
+```text
+internal/backend/<page>/
+├── api.go       refresh reads, commands and streams grouped by comments
+├── types.go     DTOs, options and typed event payloads
+├── errors.go    only when domain error translation is needed
+└── api_test.go
+```
+
+A page API is a thin dependency holder, not an independently opened service:
+
+```go
+type API struct {
+    docker   DockerClient
+    commands CommandRunner // only for pages with commands
 }
 ```
 
-Payloads are domain-specific value types introduced with their slice, for
-example `ContainerListUpdated`, `ContainerDetailsUpdated`,
-`DashboardSummaryUpdated`, `DockerEventObserved`, `RefreshFailed`, and
-`SubscriberOverflow`. Update payloads contain everything a view needs to
-replace its local data. DTOs are treated as immutable after publication.
+Page APIs have no `Open`, `Close`, `closed`, `ensureOpen`, lifecycle mutex or
+resource cache. Runtime components own process lifecycle.
 
-The envelope sequence provides page-bus-local ordering and diagnostics. It is
-not a snapshot version and is not used as a cache key.
+Each page API exposes one `ReadRefresh` function to the Refresh Manager. The
+Containers API also exposes commands, targeted refresh requests, logs and
+stats. Docker SDK types never cross the page API boundary.
 
-### Page Event Buses
+Container list, details and process results are typed events on
+`PageContainers`. Details and processes use the full `{kind, ID}` refresh key;
+subscriptions may filter by type/key. They are deliberately not changed to
+direct return values.
 
-The backend owns one physical in-process Event Bus for each tab: Dashboard,
-Containers, Compose, Images, Volumes, Networks, Events, and System. Each bus
-provides:
+## API categories
 
-- typed filtering by event type and, where relevant, refresh key or resource ID;
-- ordered delivery for each subscriber;
-- independent bounded queues;
-- cancellation and idempotent close;
-- non-blocking publication so one slow session cannot block others;
-- an explicit `SubscriberOverflow` payload when a queue fills; it replaces the
-  oldest queued update, keeps that subscription usable, and tells the session
-  which visible data to refresh.
+### Page and targeted refreshes
 
-Each bus broadcasts observations only for its page. It is not used as a hidden
-RPC mechanism:
-commands and refreshes remain direct calls so context cancellation, errors, and
-results return to the initiating session predictably.
+Backend-owned asynchronous reads followed by typed Event Hub publication.
 
-### Refresh catalog and coordinator
+### Short commands
 
-The catalog is a routing table that maps each `RefreshKind` to its page and
-loader; it stores no loaded Docker data. The coordinator turns a keyed refresh
-request into a Docker/Compose load and a typed update event. The complete
-`RefreshKey`, including its optional ID, is passed to that loader.
+Backend-owned after bounded queue acceptance. The TUI may wait for a structured
+`CommandResult`, while resulting authoritative state arrives through page
+events.
 
-For each request it:
+### Session-owned streams
 
-1. validates the key and selects its page and loader;
-2. executes a new load for that request;
-3. lets caller cancellation or backend shutdown cancel the load;
-4. publishes the successful typed payload to that page's subscribers;
-5. publishes `RefreshFailed` for operational failures and returns the error.
+Container logs and stats use the session/view context directly. Closing the
+stream, leaving the view or disconnecting closes the Docker reader and stream
+goroutine. Streams do not use the command queue or Refresh Manager.
 
-Concurrent direct refreshes, including identical keys, execute independently.
-The coordinator keeps no request map, debounce record, or loaded resource
-result. Automatic page-trigger collapsing belongs only to the runtime
-dispatcher described below.
+Container exec is not part of this version. A future interactive terminal may
+be designed explicitly as a session-owned bidirectional stream.
 
-### Runtime refresh dispatcher
+### Long-running jobs
 
-The runtime owns one process-wide dispatcher for automatic page refreshes from
-successful short commands and Docker events. `RequestPage` synchronously marks
-one of the finite application pages dirty and returns without waiting for a
-Docker read. A single backend-lifetime worker calls the existing coordinator.
+Future Compose up/build/pull and image pull operations use a backend-owned job
+abstraction rather than the short-command queue. A bounded job registry owns
+operation lifetime; a TUI owns only its progress subscription and wait. Job
+completion requests affected Refresh Manager keys. The job runtime is added in
+the relevant later slice, not prebuilt now.
 
-At most one pending entry exists per page. If ten matching triggers arrive
-before the page is handled, one authoritative read is sufficient. If another
-trigger arrives while that read is running, the page remains dirty and is read
-once more afterward. This is bounded refresh-trigger state, not a Docker
-resource cache and not a command queue.
+## Docker event ingestion
 
-Explicit `Backend.Refresh(ctx, page)` remains synchronous and uses the caller's
-context. Docker mutations also remain direct calls under the initiating
-session's context. Only their shared follow-up page refreshes use the dispatcher
-and survive session disconnection.
+The backend owns one process-wide Docker event stream and reconnects after
+transient failures without opening overlapping listeners.
 
-### Refresh scheduler
+For each normalized event it independently:
 
-The scheduler is process-wide. It submits configured base refreshes such as
-container lists, image lists, project lists, dashboard summaries, disk usage,
-and Engine information. It must never inspect every individual resource on a
-timer.
+1. publishes the raw observation to `PageEvents`;
+2. adds it to bounded Event Hub history;
+3. requests Dashboard and affected resource-page refreshes.
 
-Detailed windows refresh when opened or explicitly requested by the session
-that owns the current selection. Automatic command and Docker-event triggers
-refresh affected base pages. The first implementation may refresh base topics
-even with no subscribers; interest-aware scheduling is a later optimization.
-All timing is injectable and deterministic in unit tests.
+`PageEvents` subscribers are never required for Dashboard or another page to
+refresh. Docker events are hints to re-read authoritative state, not final UI
+state.
 
-### Backend Docker-event listener and Event Hub history
+## State ownership
 
-The Backend owns one process-wide listener that consumes the Engine event
-stream. It reconnects after transient stream failures and never opens more than
-one stream at a time. Each event is normalized once, published by the Backend
-to the Event Hub's Events-page bus, added to bounded Event Hub history, and
-mapped to affected pages. The Backend marks those pages in the process-wide
-refresh dispatcher.
+| State | Owner | Lifetime |
+| --- | --- | --- |
+| Containers, images, volumes, networks and Engine facts | Docker daemon | Docker-managed |
+| Rendered resource data | Each Bubble Tea model | Session/page lifetime |
+| Subscription buffers | Event Hub | Subscription lifetime |
+| Recent normalized Docker events | Event Hub history | Bounded process lifetime |
+| Pending refresh keys | Refresh Manager | Until handled/shutdown |
+| Accepted short commands | Command Executor | Until completion/timeout/shutdown |
+| Future active jobs | Job runtime | Until completion/cancellation/shutdown |
+| Logs and stats | Initiating TUI session | View/session lifetime |
 
-An Engine event is a hint to reload authoritative state, not itself the final UI
-state. Each mapped refresh performs a new read; occasional duplicate reads are
-accepted in exchange for straightforward behavior.
-
-### Domain services
-
-Domain services wrap the shared Docker/Compose dependencies. They translate SDK
-types and errors into stable application DTOs and perform commands directly
-under the initiating session context. After Docker reports success, they
-synchronously mark affected base pages in the shared dispatcher before
-returning. They do not publish fabricated final state before Docker has been
-read again.
-
-## Communication models
-
-- **Request/response:** validation, commands, one-shot exec, and explicit
-  refresh. The caller needs an immediate result or error.
-- **Subscription:** typed resource updates and normalized Docker events shared
-  with every interested session.
-- **Stream:** logs, stats, exec output, and similar ordered session-owned data.
-- **Job:** long-running Compose up/build/pull and image pull operations with
-  progress, completion, and cancellation.
-
-Successful commands mark their affected pages for backend-owned refresh and
-then return a `CommandResult`. Successful jobs do the same on completion.
-Progress remains private to the initiating session; final resource updates are
-broadcast. A details window remains session-owned and explicitly requests its
-selected resource when it needs a targeted reload.
-
-Every blocking operation accepts `context.Context`. Cancellation must stop
-waiting promptly and must not leak goroutines, readers, subscriptions, or
-streams.
+Operational queue and subscription state is necessary coordination state; it is
+not a duplicate Docker resource cache.
 
 ## Error model
 
-Application errors have stable categories such as invalid input, not found,
-conflict, permission denied, unavailable, unsupported, timeout, canceled,
-subscriber overflow, and internal failure. Errors wrap useful causes and include
-the operation and resource identity without exposing secrets.
+Application errors have stable categories: invalid input, not found, conflict,
+permission denied, daemon unavailable, timeout, canceled, stream closed,
+unsupported and internal failure. Errors wrap useful causes and identify the
+operation/resource without exposing secrets.
 
-`RefreshFailed` carries safe structured failure information so every observing
-session can mark the relevant view stale or show a retry action. A later success
-replaces that session-local state normally.
+Refresh failures publish `RefreshFailed` on the affected page so sessions may
+keep their existing local data visible and offer retry. Command callers receive
+their structured error when still connected.
 
-## Domain API roadmap
-
-Each domain slice freezes only the DTOs, update events, commands, streams, jobs,
-and refresh keys needed by that tab/window. Docker SDK types never cross the
-domain boundary.
+## Domain roadmap summary
 
 ### Dashboard
 
-- Engine summary: availability, version, host, OS, architecture, capacity, and
-  Engine-reported system time. Docker does not expose a reliable daemon uptime
-  field through the Engine API.
-- Resource counts: running/stopped containers, images, volumes, and networks.
+- Engine availability/version/host/capacity.
+- Container, image, volume and network counts.
 - Docker disk usage.
-- Recent normalized events from the backend ring buffer.
-- Cross-resource changes trigger affected dashboard refresh keys.
+- Recent normalized Docker events.
 
 ### Containers
 
-- List, filter, inspect, and top/processes.
-- Start, stop, restart, pause, unpause, kill, rename, and remove.
-- One-shot exec.
-- Session-owned logs and stats streams.
-- Optional future interactive terminal stream.
+- List, filters, inspect/details and processes.
+- Start, stop, restart, pause, unpause, kill, rename and remove.
+- Session-owned logs and stats.
+- Container exec is deferred from this version.
 
 ### Compose
 
 - Discover active projects from Compose labels.
-- Load project definitions only from configured allowed directories.
-- List projects and inspect services/containers.
-- Start, stop, restart, pause, unpause, exec, and scale.
-- Up, down, pull, and build as cancellable jobs where appropriate.
-- Session-owned logs and job progress.
+- Load definitions only from configured allowed directories.
+- Project/service details and short lifecycle commands.
+- Up, down, pull and build as jobs where appropriate.
+- Logs and job progress.
 
-Docker cannot reliably discover every inactive Compose project on disk. The
-first version combines configured allowed directories with active projects
-found through labels.
+### Images, Volumes and Networks
 
-### Images
+- Typed list/details APIs and safely scoped mutations.
+- Pull/build progress as jobs where needed.
+- No unrestricted prune without a dedicated test daemon and deliberate
+  production confirmation.
 
-- List, inspect, and history.
-- Tag, remove, pull, and safely filtered prune.
-- Image pull progress is session-owned; resulting list/disk-usage updates are
-  broadcast.
-- Push and advanced registry credential management are deferred.
+### Events and System
 
-### Volumes
+- Live and bounded recent normalized Docker events.
+- Docker version/info, detailed disk usage and safely scoped prune operations.
 
-- List, inspect, create, remove, and safely filtered prune.
-- Show attached containers using Docker data.
-- Browsing, backup, and restore are deferred because they require a helper
-  container or direct filesystem access.
+Detailed work remains ordered in `docs/TODO.md`.
 
-### Networks
+## Session page lifecycle
 
-- List, inspect, create, remove, and safely filtered prune.
-- Show connected containers and assigned addresses.
-- Connect and disconnect containers.
-- Focus on local bridge networks; advanced drivers and Swarm overlays are
-  deferred.
+1. Create a session-derived context for the active page.
+2. Subscribe to that page Event Bus.
+3. Call `RequestRefresh(page)`.
+4. Render the typed event received by the subscription.
+5. Replace session-local data on later scheduled/event/command updates.
+6. On overflow, request recovery through the same Refresh Manager path.
+7. Cancel the page context and close its subscription/streams when leaving.
 
-### Events
+This subscribe-before-request ordering avoids missing the initial result.
 
-- Bounded recent normalized events.
-- Live filtered subscriptions.
-- Session-local pause, filtering, and clearing in the future TUI.
-- Mapping from supported Docker event actions to affected refresh keys.
+## Shutdown order
 
-### System
+1. Reject new facade requests and stop scheduler/event producers.
+2. Cancel and wait for Command Executor workers.
+3. Cancel and wait for the Refresh Manager worker.
+4. End SSH sessions so their subscriptions and streams close.
+5. Close the Event Hub.
+6. Close the shared Moby client exactly once.
 
-- Docker client/server/API version and Engine information.
-- Detailed disk usage.
-- Safely scoped resource prune operations.
-- Fully unrestricted system prune only in an explicitly dedicated test daemon
-  and only through deliberate production confirmation.
-
-## Session lifecycle
-
-When a session opens a data-backed page:
-
-1. construct a narrow subscription filter;
-2. subscribe to the Event Bus for the active page;
-3. request the page's initial refresh through `Refresh(ctx, page)`;
-4. render the typed update received by the subscription;
-5. replace local view data on later scheduled/event/command updates;
-6. on overflow, request a recovery refresh for the active page;
-7. cancel and close the subscription when the view/session ends.
-
-This ordering avoids missing an update between the initial load and
-subscription. If multiple sessions independently request the same refresh, each
-request performs a read and each result is published to the active page
-observers. Correctness is preferred over deduplicating these inexpensive calls.
+Every owned goroutine and reader must terminate under race and leak checks.
 
 ## Testing strategy
 
-Development is test-first. Production contracts remain in `internal/backend`;
-reusable suites and real-Docker fixtures remain under `test`.
+Development is test-first. Hermetic tests cover routing, exact-key refresh
+deduplication, typed publication, queue FIFO behavior, bounded concurrency,
+overload, disconnect survival, timeouts, cancellation, page isolation, stream
+closure and shutdown. Integration tests use a labeled Docker fixture and verify
+the same exported contracts against a real daemon.
 
-Hermetic unit tests cover page-bus isolation, Event Bus delivery and overflow,
-independent concurrent refreshes, failures, deterministic scheduling,
-event-buffer eviction, cancellation, lifecycle ownership, trigger mapping, and
-leak-free shutdown.
-
-The reusable integration conformance suite receives a production
-`BackendFactory`, starts the real backend against a safe Docker fixture, and
-verifies behavior through exported contracts. Its foundational observer test
-subscribes two sessions, requests one refresh, and requires both to receive the
-same typed authoritative result. Later tab slices add real resource creation,
-commands, event-triggered updates, streams, jobs, and cleanup checks.
-
-Tests must not receive unrestricted access to the fixture's Moby client. Narrow
-arrangement/inspection helpers label every created resource with a unique run
-ID, register explicit cleanup targets immediately, and remove only those
-targets. Destructive prune tests require an explicitly dedicated daemon.
-
-Required quality gates are formatting, `go vet`, unit tests, integration tests,
-race-enabled variants, deterministic cleanup, and leak-free shutdown. Exact
-commands and fixture rules are in `docs/testing.md`.
-
-## Implementation order
-
-1. Use the completed observer and Docker-event foundations from Slices 0 and
-   0.5 for every domain.
-2. Use the completed Dashboard slice as the page-package pattern.
-3. Implement Containers, Compose, Images, Volumes, Networks, Events, and System
-   in the order listed in `docs/TODO.md`.
-4. Finish lifecycle, race, cleanup, and full-facade quality gates.
+Required gates are formatting, `go vet`, unit tests, integration tests,
+race-enabled variants, repeated concurrency-sensitive tests, deterministic
+fixture cleanup and `git diff --check`. Exact commands and fixture safety rules
+are in `docs/testing.md`.
 
 ## Explicitly removed architecture
 
-The project does not use `StateStore`, `Snapshot`, `SnapshotMeta`,
-`SnapshotView`, snapshot versions, stale cache metadata, or
-`GetSnapshotVersion`. Those types belonged to the earlier cache-based design
-and were removed. The recent Docker-event ring buffer remains because it is
-bounded event history, not a duplicate cache of Docker resource state.
+The project does not use `StateStore`, snapshots, snapshot versions, stale-cache
+metadata, page Loader objects, domain Service lifecycle objects, a separate
+refresh catalog/coordinator/dispatcher stack, or synchronous session-owned page
+refresh reads.

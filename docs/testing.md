@@ -1,70 +1,46 @@
 # Backend Testing Environment
 
-The backend is developed test-first. Tests describe observable backend behavior
-before each domain implementation exists. They are not a mock backend and do
-not require the TUI to be implemented first.
+The backend is developed test-first. Tests describe behavior visible through
+the application API before the TUI exists; they are not a mock backend.
 
-This document describes the implemented observer-based foundation in
-`docs/plan.md`.
-
-## Separation from production
+## Production and test separation
 
 ```text
-internal/backend/              production contracts and behavior
-    contracts.go               shared refresh/event/lifecycle contracts
-    errors.go                  stable application error categories
-    clock.go                   injectable production timing boundary
+internal/backend/                 production contracts and behavior
+├── contracts.go                  shared page/event/command/stream contracts
+├── errors.go                     stable application errors
+├── clock.go                      injectable timing boundary
+├── eventhub/                     page buses and Docker-event history
+├── runtime/
+│   ├── backend.go                process-wide facade and shutdown
+│   ├── refresh_manager.go        refresh routing, pending work and publication
+│   ├── command_executor.go       bounded FIFO queue and fixed workers
+│   ├── scheduler.go              periodic refresh requests
+│   └── docker_events.go          reconnecting daemon event listener
+├── dashboard/
+│   ├── api.go                    Dashboard refresh read
+│   └── types.go                  Dashboard DTOs and update event
+└── containers/
+    ├── api.go                    reads, commands and streams
+    ├── types.go                  Containers DTOs/options/events
+    └── errors.go                 Docker error translation
 
-internal/backend/dashboard/    Dashboard page package
-    dashboard.go               DTOs, typed update, and complete Docker loader
+internal/platform/docker/         real Docker/Compose construction and adapters
 
-internal/backend/eventhub/     observation delivery and event history
-    hub.go                     page routing and bounded Docker-event history
-    bus.go                     typed bounded subscriptions
-    history.go                 recent normalized Docker events
-
-internal/backend/refresh/      authoritative refresh routing and execution
-    catalog.go                 page/key-to-loader routing
-    coordinator.go             direct loads and Event Hub publication
-    scheduler.go               process-wide scheduled refresh requests
-
-internal/backend/runtime/      process-wide Backend implementation
-    backend.go                 facade, event routing, and lifecycle
-    docker_events.go           one reconnecting daemon-event consumer
-    refresh_dispatcher.go      bounded backend-owned page refresh triggers
-
-internal/platform/docker/      real infrastructure adapters
-    dependencies.go            shared Moby, Docker CLI, and Compose wiring
-    event_source.go             Moby event-stream normalization
-
-test/backendtest/              reusable black-box backend conformance suite
-    environment.go             BackendFactory and IntegrationEnvironment
-    suite.go                   behavior required of any real backend
-
-test/dockerfixture/            safe real-Docker fixture
-    config.go                  unique run configuration
-    fixture.go                 private Moby client and tracked resources
-    cleanup.go                 dependency-order cleanup
-
-test/testkit/                  deterministic test-only utilities
-    clock.go                   manually advanced clock and ticker
-    loader.go                  recording loader and synchronization gate
-    closer.go                  dependency-ownership recorder
-
-test/integration/              production implementation entry points
-    docker_fixture_test.go      real-daemon fixture smoke test
-    backend_conformance_test.go production factory wired into the suite
+test/backendtest/                 reusable black-box conformance suite
+test/dockerfixture/               safe labeled real-Docker fixture
+test/testkit/                     deterministic clocks/readers/closers/gates
+test/integration/                 production backend against real Docker
 ```
 
-Production contracts stay in `internal/backend` because production code must
-implement them. Reusable test scenarios, fake clocks/loaders, and Docker fixture
-code stay under `test`. Small `_test.go` files beside production files are normal
-Go unit tests: they can exercise unexported concurrency details and are excluded
-from production binaries automatically.
+Small `_test.go` files beside production files are normal Go unit tests. They
+may test unexported concurrency details and are excluded from production
+binaries. Reusable black-box behavior and real-Docker fixtures remain under
+`test`.
 
-## How tests precede the backend
+## How tests precede implementation
 
-The conformance suite depends only on public contracts and a factory:
+The reusable suite depends on a public factory:
 
 ```go
 type BackendFactory func(
@@ -73,106 +49,84 @@ type BackendFactory func(
 ) (backend.Backend, error)
 ```
 
-A test states what callers must observe. At first, the production factory either
-does not compile against the new contract or fails the test. The minimum real
-implementation is then added until it passes. This keeps the test independent
-of implementation details while still running against actual production code.
+A scenario first describes what sessions observe. Production code is then
+implemented until the scenario passes. A foundational scenario:
 
-The foundational observer scenario is:
+1. creates the real backend;
+2. subscribes two observers to the System page;
+3. calls `RequestRefresh(PageSystem)` once;
+4. requires both observers to receive the same typed result;
+5. proves the event does not leak to another page;
+6. cancels one observer without affecting the other;
+7. closes the backend and verifies shared ownership.
 
-1. create the real production backend through `BackendFactory`;
-2. open two independent filtered subscriptions to the System page bus;
-3. request one explicit System page refresh;
-4. require both subscribers to receive the same typed full-result update;
-5. prove updates do not leak to another page bus;
-6. cancel one subscription and prove the other remains usable;
-7. close the backend and verify shared dependencies close exactly once.
+Sessions always subscribe before requesting initial data.
 
-The session subscribes before requesting its initial data. This prevents an
-update from being published between an initial load and subscription.
+## Hermetic unit coverage
 
-## What is tested without Docker
+Unit tests use fake Docker APIs, a manually advanced clock, explicit gates and
+recording handlers. They cover:
 
-Hermetic unit tests use fake clocks and loaders for behavior that must be fast
-and deterministic:
+- refresh registration, validation and page/key routing;
+- exact-key pending deduplication;
+- a trigger arriving during an active refresh;
+- bounded refresh work and closed-manager rejection;
+- backend-owned read contexts, read timeout and shutdown cancellation;
+- typed success/failure publication to only the routed page;
+- bounded command FIFO order and fixed worker concurrency;
+- command overload behavior;
+- accepted command survival after caller cancellation;
+- command timeout and backend shutdown cancellation;
+- refresh requests after attempted mutations;
+- page API Docker calls, DTO conversion and error mapping;
+- targeted details/process refresh keys;
+- Event Bus filtering, ordering, overflow, cancellation and close;
+- scheduler timing without wall-clock sleeps;
+- Docker event routing and listener reconnection;
+- logs/stats transformation and session cancellation;
+- dependency ownership and leak-free shutdown.
 
-- refresh-key validation and loader selection;
-- separate Event Bus delivery for each page;
-- identical concurrent refresh requests each executing their own loader call;
-- caller cancellation affecting only its own refresh;
-- publication of every successful typed result;
-- `RefreshFailed` delivery and errors returned to direct callers;
-- Event Bus filtering, per-subscriber ordering, cancellation, and idempotent
-  close;
-- bounded subscriber queues and explicit overflow/resync behavior;
-- recent-event ring-buffer ordering and eviction;
-- scheduler timing without real sleeps;
-- bounded automatic page-trigger collapsing and backend-owned cancellation;
-- successful commands recording shared refreshes after session cancellation;
-- context cancellation, graceful shutdown, ownership, and leak prevention.
+There are no snapshot/cache tests because the architecture contains no Docker
+resource snapshot cache.
 
-There are intentionally no tests for snapshot versions, cache comparison,
-cached stale state, or `StateStore`: those concepts are not part of the target
-architecture. On refresh failure, each session keeps the UI data it already
-owns and marks it stale from the failure event.
+## Real-Docker integration coverage
 
-## What is tested with Docker
+Integration tests verify behavior that fakes cannot establish reliably:
 
-Integration tests connect the production core and domain services to a real
-Docker daemon. They verify things fakes cannot establish reliably:
-
-- real Moby request/response behavior and error translation;
-- typed payloads created from real Docker data;
-- successful commands followed asynchronously by authoritative refresh broadcasts;
-- Docker events mapped to refresh requests and updates;
-- a real labeled volume event triggering a complete Dashboard refresh;
-- logs, stats, exec, and job cancellation/closure;
-- lifecycle ownership of the shared Moby client;
+- real Moby request/response behavior;
+- typed Dashboard and Containers data from a real daemon;
+- accepted commands followed by authoritative page updates;
+- normalized Docker events and affected-page refreshes;
+- details and processes delivered through `PageContainers`;
+- logs and stats stream behavior;
+- use and closure of one shared Moby client;
 - cleanup of every resource created by the test.
 
-Each tab/window slice extends the same reusable conformance suite. Tests are
-implemented iteratively with the domain slice rather than writing speculative
-tests for every API in advance.
+Container exec is not part of this version and has no contract or test.
 
 ## Commands
 
 ```sh
-# Formatting, go vet, and unit tests
+# Formatting, vet and unit tests
 make check
 
-# Unit tests only
+# Unit tests
 make test
 
-# Unit tests with the race detector
+# Race-enabled unit tests
 make test-race
 
-# Unit tests and real-Docker integration tests
+# Real-Docker tests
 make test-integration
 
-# Complete integration suite with the race detector
+# Race-enabled real-Docker tests
 make test-integration-race
 
 # Both race-enabled suites
 make test-all
 ```
 
-The current executable is also a small manual Dashboard, Containers-list, and
-event-stream demo:
-
-```sh
-# Print real Dashboard and Containers refreshes, then watch Docker events for 10s.
-go run ./cmd/ssh-docker-tui
-
-# Print the Dashboard and Containers results without watching.
-go run ./cmd/ssh-docker-tui -watch=0
-```
-
-While the first command is watching, creating or starting a Docker resource in
-another terminal demonstrates the process-wide event listener and automatic
-refreshes of the affected Dashboard or Containers page. This console demo will
-be replaced by Wish and Bubble Tea when TUI implementation begins.
-
-These commands correspond to:
+Equivalent direct commands are:
 
 ```sh
 go test ./...
@@ -181,96 +135,74 @@ go test -tags=integration ./...
 go test -race -tags=integration ./...
 ```
 
-During the refactor, a red suite is acceptable only for the deliberately changed
-contract currently being implemented. Each commit/phase should return the tree
-to compiling tests before moving to the next phase.
+The executable is a temporary manual Dashboard/Containers demo:
+
+```sh
+# Containers page only, then watch updates for ten seconds.
+go run ./cmd/ssh-docker-tui
+
+# Initial Containers data only.
+go run ./cmd/ssh-docker-tui -watch=0
+
+# Dashboard and Containers.
+go run ./cmd/ssh-docker-tui -page=all
+
+# Exercise an existing container command.
+go run ./cmd/ssh-docker-tui \
+  -container-id=my-container \
+  -container-action=restart \
+  -watch=20s
+```
+
+Supported manual actions are start, stop, restart, pause, unpause, kill,
+rename and remove. Destructive operations act only on the explicitly selected
+existing resource.
 
 ## Docker configuration
 
-By default, the integration fixture follows normal Docker client configuration
-(`DOCKER_HOST` and the local Unix socket). These optional variables affect tests
-only:
+The integration fixture follows normal Docker client configuration by default.
+Optional test-only variables:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `BACKEND_TEST_DOCKER_HOST` | Docker client default | Override the test daemon endpoint. |
+| `BACKEND_TEST_DOCKER_HOST` | Docker client default | Override the test daemon. |
 | `BACKEND_TEST_PREFIX` | `ssh-docker-tui-test` | Prefix test resources. |
 | `BACKEND_TEST_TIMEOUT` | `30s` | Bound Docker operations and cleanup. |
-| `BACKEND_TEST_DEDICATED_DAEMON` | `false` | Permit tests requiring an isolated daemon. |
-| `BACKEND_TEST_CONTAINER_IMAGE` | `nginx:latest` | Existing Linux image with `sh`, used by Containers integration tests; it is never pulled or removed by the suite. |
+| `BACKEND_TEST_DEDICATED_DAEMON` | `false` | Permit isolated-daemon destructive tests. |
+| `BACKEND_TEST_CONTAINER_IMAGE` | `nginx:latest` | Existing Linux image with `sh`; never pulled or removed by tests. |
 
-Each fixture invocation appends a cryptographically random run ID and labels
-created resources with:
+Every run receives a random ID and labels its resources with:
 
 - `io.github.petar030.ssh-native-docker-tui.test=true`
 - `io.github.petar030.ssh-native-docker-tui.test-run=<unique-run-id>`
 
-It also creates a temporary Compose root for that test.
-
 ## Resource safety and cleanup
 
-The fixture deliberately does not expose its unrestricted Moby client. Each
-domain slice adds narrow arrangement and inspection helpers. Helpers must create
-names through `fixture.Name`, apply `fixture.Labels`, and register every resource
-immediately after creation:
+The fixture does not expose its unrestricted Moby client. Domain tests use
+narrow arrangement and inspection helpers. Every created resource must use
+`fixture.Name`, apply `fixture.Labels`, and be tracked immediately.
 
-```go
-fixture := dockerfixture.New(t)
-
-containerID := arrangeContainer(t, fixture)
-fixture.TrackContainer(containerID)
-```
-
-Cleanup always runs, including after `t.Fatal`, and removes only explicitly
-registered resources in dependency order:
+Cleanup removes only explicitly tracked resources, in dependency order:
 
 1. containers;
 2. networks;
 3. volumes;
 4. uniquely tagged test images.
 
-Do not register shared base images with `TrackImage`. Unrestricted prune and
-similar destructive cases must call `fixture.RequireDedicatedDaemon(t)` and are
-skipped unless `BACKEND_TEST_DEDICATED_DAEMON=true`.
+Never track or remove shared base images. Unrestricted prune tests must call
+`fixture.RequireDedicatedDaemon(t)` and remain skipped unless
+`BACKEND_TEST_DEDICATED_DAEMON=true`.
 
-Tests must never discover cleanup targets by listing arbitrary host resources.
-Assertions and cleanup stay restricted to the current run's labels, prefix,
-returned IDs, and Compose project name.
-
-## Production backend connection
-
-The integration entry point creates a fixture and passes its restricted
-environment to the reusable suite:
-
-```go
-func TestProductionBackendConformance(t *testing.T) {
-    fixture := dockerfixture.New(t)
-
-    backendtest.RunBackendConformance(
-        t,
-        productionBackendFactory,
-        fixture.Environment(),
-    )
-}
-```
-
-The production factory constructs the real shared client, infrastructure
-adapters, Event Hub, refresh catalog/coordinator, Backend-owned Docker listener,
-and scheduler, and returns the Backend facade. It must not perform a hidden
-cache warm-up. The suite subscribes and explicitly requests the initial refresh
-it needs.
+Tests never discover cleanup targets by listing arbitrary host resources.
 
 ## TDD workflow per slice
 
-1. Freeze only the DTOs, typed update payloads, internal refresh keys, and operations for
-   the next tab/window.
-2. Add observable behavior to `test/backendtest` and deterministic edge cases to
-   local unit tests.
-3. Run the tests and confirm the new behavior fails for the expected reason.
-4. Implement the smallest production loader/service/command path.
-5. Run unit, integration, race, cleanup, and shutdown checks.
-6. Update `docs/TODO.md` when the behavior and quality gates actually pass.
+1. Freeze only the next page's DTOs, typed events, refresh keys and operations.
+2. Add observable conformance behavior and deterministic unit edge cases.
+3. Confirm the new behavior fails for the expected reason.
+4. Implement the smallest page API and runtime wiring.
+5. Run unit, integration, race, repeated concurrency and cleanup checks.
+6. Mark `docs/TODO.md` only when behavior and gates pass.
 
-Fake adapters supplement rather than replace the real-Docker path. Conversely,
-real Docker tests do not replace deterministic unit coverage of concurrency,
-failure, overflow, and cancellation.
+Fake adapters supplement rather than replace real-Docker tests. Real Docker
+does not replace deterministic concurrency, failure and cancellation tests.

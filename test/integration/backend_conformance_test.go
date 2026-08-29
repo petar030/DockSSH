@@ -113,7 +113,7 @@ func TestContainersSliceAgainstDocker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("subscribe to Containers: %v", err)
 	}
-	if err := application.Refresh(ctx, backend.PageContainers); err != nil {
+	if err := application.RequestRefresh(backend.PageContainers); err != nil {
 		t.Fatalf("refresh Containers: %v", err)
 	}
 	initial := waitForContainerList(t, ctx, listSubscription.Events(), backend.RefreshManual, containerID)
@@ -127,7 +127,7 @@ func TestContainersSliceAgainstDocker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("subscribe to Container details: %v", err)
 	}
-	if err := application.Containers().RefreshDetails(ctx, containerID); err != nil {
+	if err := application.Containers().RequestDetails(containerID); err != nil {
 		t.Fatalf("refresh details: %v", err)
 	}
 	detailsEvent := receiveIntegrationEvent(t, ctx, detailsSubscription.Events())
@@ -142,23 +142,13 @@ func TestContainersSliceAgainstDocker(t *testing.T) {
 	if findContainer(running.Containers, containerID).State != "running" {
 		t.Fatalf("container did not become running: %#v", findContainer(running.Containers, containerID))
 	}
-	if err := application.Containers().RefreshProcesses(ctx, containerID); err != nil {
+	if err := application.Containers().RequestProcesses(containerID); err != nil {
 		t.Fatalf("refresh processes: %v", err)
 	}
 	processEvent := waitForEventType(t, ctx, detailsSubscription.Events(), containers.EventProcessesUpdated)
 	processes := processEvent.Payload.(containers.ProcessesUpdated)
 	if processes.ContainerID != containerID || len(processes.Titles) == 0 || len(processes.Rows) == 0 {
 		t.Fatalf("container processes = %#v", processes)
-	}
-
-	execResult, err := application.Containers().Exec(ctx, containerID, containers.ExecOptions{
-		Command: []string{"sh", "-c", "printf exec-out; printf exec-err >&2; exit 7"},
-	})
-	if err != nil {
-		t.Fatalf("one-shot exec: %v", err)
-	}
-	if execResult.ExitCode != 7 || execResult.Stdout != "exec-out" || execResult.Stderr != "exec-err" {
-		t.Fatalf("exec result = %#v", execResult)
 	}
 
 	logsContext, cancelLogs := context.WithTimeout(ctx, 5*time.Second)

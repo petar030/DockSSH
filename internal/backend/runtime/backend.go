@@ -10,30 +10,29 @@ import (
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/eventhub"
-	"github.com/petar030/ssh-native-docker-tui/internal/backend/refresh"
 )
 
 type Config struct {
 	Clock             backend.Clock
 	EventHub          *eventhub.Hub
-	Refreshes         *refresh.Coordinator
-	RefreshDispatcher *RefreshDispatcher
+	Refreshes         *RefreshManager
+	Commands          *CommandExecutor
 	RefreshPolicies   []backend.RefreshPolicy
 	DockerEvents      DockerEventSource
 	DockerEventRetry  time.Duration
 	OwnedDockerClient io.Closer
-	Containers        *containers.Service
+	Containers        *containers.API
 }
 
-// Backend is the process-wide implementation used by every TUI session. It
-// routes direct calls and Docker events without retaining Docker resource data.
+// Backend is the process-wide facade shared by every TUI session. It routes
+// requests into backend-owned workers and stores no Docker resource snapshots.
 type Backend struct {
 	events     *eventhub.Hub
-	refreshes  *refresh.Coordinator
-	scheduler  *refresh.Scheduler
+	refreshes  *RefreshManager
+	commands   *CommandExecutor
+	scheduler  *Scheduler
 	owner      io.Closer
-	containers *containers.Service
-	dispatcher *RefreshDispatcher
+	containers *containers.API
 
 	runCancel context.CancelFunc
 	runDone   chan error
@@ -44,44 +43,34 @@ type Backend struct {
 	closeErr  error
 }
 
-// New constructs the Backend runtime and starts its scheduler and optional
-// process-wide Docker event listener.
+// New constructs the runtime and starts the scheduler and optional process-wide
+// Docker event listener. Accepted work is independent of the construction
+// caller's context and ends only during Backend.Close.
 func New(ctx context.Context, config Config) (*Backend, error) {
-	if ctx == nil || config.EventHub == nil || config.Refreshes == nil {
-		closeRuntimeDependencies(config.EventHub, config.Refreshes, config.RefreshDispatcher, config.Containers)
+	if ctx == nil || config.EventHub == nil || config.Refreshes == nil || config.Commands == nil {
+		closeRuntimeDependencies(config.Commands, config.Refreshes, config.EventHub)
 		closeOwned(config.OwnedDockerClient)
 		return nil, &backend.AppError{Code: backend.ErrorInvalidInput, Operation: "create backend runtime"}
 	}
 	if err := ctx.Err(); err != nil {
-		closeRuntimeDependencies(config.EventHub, config.Refreshes, config.RefreshDispatcher, config.Containers)
+		closeRuntimeDependencies(config.Commands, config.Refreshes, config.EventHub)
 		closeOwned(config.OwnedDockerClient)
 		return nil, canceledError("create backend runtime", err)
 	}
 	if config.Clock == nil {
 		config.Clock = backend.NewRealClock()
 	}
-	dispatcher := config.RefreshDispatcher
-	if dispatcher == nil {
-		var dispatcherErr error
-		dispatcher, dispatcherErr = NewRefreshDispatcher(config.Refreshes)
-		if dispatcherErr != nil {
-			closeRuntimeDependencies(config.EventHub, config.Refreshes, nil, config.Containers)
-			closeOwned(config.OwnedDockerClient)
-			return nil, dispatcherErr
-		}
-	}
-	scheduler, err := refresh.NewScheduler(config.Clock, config.Refreshes, config.RefreshPolicies)
+	scheduler, err := NewScheduler(config.Clock, config.Refreshes, config.RefreshPolicies)
 	if err != nil {
-		closeRuntimeDependencies(config.EventHub, config.Refreshes, dispatcher, config.Containers)
+		closeRuntimeDependencies(config.Commands, config.Refreshes, config.EventHub)
 		closeOwned(config.OwnedDockerClient)
 		return nil, err
 	}
 
 	application := &Backend{
-		events: config.EventHub, refreshes: config.Refreshes, scheduler: scheduler,
-		owner: config.OwnedDockerClient, containers: config.Containers, dispatcher: dispatcher,
-		runDone:   make(chan error, 1),
-		closeDone: make(chan struct{}),
+		events: config.EventHub, refreshes: config.Refreshes, commands: config.Commands,
+		scheduler: scheduler, owner: config.OwnedDockerClient, containers: config.Containers,
+		runDone: make(chan error, 1), closeDone: make(chan struct{}),
 	}
 	runContext, runCancel := context.WithCancel(context.Background())
 	application.runCancel = runCancel
@@ -94,7 +83,7 @@ func New(ctx context.Context, config Config) (*Backend, error) {
 		if listenerErr != nil {
 			runCancel()
 			<-application.runDone
-			closeRuntimeDependencies(config.EventHub, config.Refreshes, dispatcher, config.Containers)
+			closeRuntimeDependencies(config.Commands, config.Refreshes, config.EventHub)
 			closeOwned(config.OwnedDockerClient)
 			return nil, listenerErr
 		}
@@ -104,8 +93,10 @@ func New(ctx context.Context, config Config) (*Backend, error) {
 	return application, nil
 }
 
-func (application *Backend) Refresh(ctx context.Context, page backend.Page) error {
-	return application.refreshes.RefreshPage(ctx, page, backend.RefreshManual)
+// RequestRefresh accepts an asynchronous complete refresh for one page. The
+// typed result or failure is delivered through that page's Event Bus.
+func (application *Backend) RequestRefresh(page backend.Page) error {
+	return application.refreshes.RequestPage(page, backend.RefreshManual)
 }
 
 func (application *Backend) Subscribe(
@@ -116,7 +107,7 @@ func (application *Backend) Subscribe(
 	return application.events.Subscribe(ctx, page, filter)
 }
 
-func (application *Backend) Containers() containers.API {
+func (application *Backend) Containers() *containers.API {
 	return application.containers
 }
 
@@ -125,7 +116,7 @@ func (application *Backend) handleDockerEvent(_ context.Context, event backend.D
 		return
 	}
 	for _, page := range PagesAffectedByDockerEvent(event) {
-		application.dispatcher.RequestPage(page, backend.RefreshDockerEvent)
+		_ = application.refreshes.RequestPage(page, backend.RefreshDockerEvent)
 	}
 }
 
@@ -152,19 +143,15 @@ func (application *Backend) shutdown() {
 	if application.eventDone != nil {
 		listenerErr = <-application.eventDone
 	}
-	var containersErr error
-	if application.containers != nil {
-		containersErr = application.containers.Close()
-	}
-	dispatcherErr := application.dispatcher.Close()
-	refreshErr := application.refreshes.Shutdown(context.Background())
+	commandErr := application.commands.Close(context.Background())
+	refreshErr := application.refreshes.Close(context.Background())
 	eventErr := application.events.Close()
 	var ownerErr error
 	if application.owner != nil {
 		ownerErr = application.owner.Close()
 	}
 	application.closeMu.Lock()
-	application.closeErr = errors.Join(schedulerErr, listenerErr, containersErr, dispatcherErr, refreshErr, eventErr, ownerErr)
+	application.closeErr = errors.Join(schedulerErr, listenerErr, commandErr, refreshErr, eventErr, ownerErr)
 	application.closeMu.Unlock()
 	close(application.closeDone)
 }
@@ -179,20 +166,12 @@ func closeOwned(owner io.Closer) {
 	}
 }
 
-func closeRuntimeDependencies(
-	events *eventhub.Hub,
-	refreshes *refresh.Coordinator,
-	dispatcher *RefreshDispatcher,
-	containersService *containers.Service,
-) {
-	if containersService != nil {
-		_ = containersService.Close()
-	}
-	if dispatcher != nil {
-		_ = dispatcher.Close()
+func closeRuntimeDependencies(commands *CommandExecutor, refreshes *RefreshManager, events *eventhub.Hub) {
+	if commands != nil {
+		_ = commands.Close(context.Background())
 	}
 	if refreshes != nil {
-		_ = refreshes.Shutdown(context.Background())
+		_ = refreshes.Close(context.Background())
 	}
 	if events != nil {
 		_ = events.Close()
@@ -200,4 +179,3 @@ func closeRuntimeDependencies(
 }
 
 var _ backend.Backend = (*Backend)(nil)
-var _ containers.Backend = (*Backend)(nil)

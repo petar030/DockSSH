@@ -9,36 +9,35 @@ import (
 
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/eventhub"
-	"github.com/petar030/ssh-native-docker-tui/internal/backend/refresh"
 	"github.com/petar030/ssh-native-docker-tui/test/testkit"
 )
 
 func TestBackendSubscribesBeforeRefreshWithoutHiddenWorkAndClosesOwnerOnce(t *testing.T) {
 	clock := testkit.NewManualClock(time.Unix(6_000, 0))
 	key := backend.RefreshKey{Kind: backend.RefreshKindBackendStatus}
-	loader := testkit.NewRecordingLoader(1, func(context.Context, backend.RefreshKey) (backend.EventPayload, error) {
+	handler := testkit.NewRecordingRefreshHandler(1, func(context.Context, backend.RefreshKey) (backend.EventPayload, error) {
 		return backend.BackendStatusUpdated{APIVersion: "1.48"}, nil
 	})
-	hub, coordinator := runtimeDependencies(t, backend.PageSystem, key.Kind, loader)
+	hub, refreshes, commands := runtimeDependencies(t, backend.PageSystem, key.Kind, handler)
 	owner := testkit.NewRecordingCloser(nil)
 	application, err := New(context.Background(), Config{
-		Clock: clock, EventHub: hub, Refreshes: coordinator, OwnedDockerClient: owner,
+		Clock: clock, EventHub: hub, Refreshes: refreshes, Commands: commands, OwnedDockerClient: owner,
 	})
 	if err != nil {
 		t.Fatalf("new Backend: %v", err)
 	}
-	if loader.Count() != 0 {
+	if handler.Count() != 0 {
 		t.Fatal("Backend performed hidden startup work")
 	}
 	subscription, err := application.Subscribe(context.Background(), backend.PageSystem, backend.EventFilter{})
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
-	if loader.Count() != 0 {
+	if handler.Count() != 0 {
 		t.Fatal("subscribing performed refresh work")
 	}
-	if err := application.Refresh(context.Background(), backend.PageSystem); err != nil {
-		t.Fatalf("refresh: %v", err)
+	if err := application.RequestRefresh(backend.PageSystem); err != nil {
+		t.Fatalf("request refresh: %v", err)
 	}
 	event := <-subscription.Events()
 	if event.Key != key || event.Reason != backend.RefreshManual || event.Sequence == 0 {
@@ -56,17 +55,17 @@ func TestBackendSubscribesBeforeRefreshWithoutHiddenWorkAndClosesOwnerOnce(t *te
 }
 
 func TestBackendConstructionFailureClosesOwnedClient(t *testing.T) {
-	hub, coordinator := runtimeDependencies(
+	hub, refreshes, commands := runtimeDependencies(
 		t,
 		backend.PageSystem,
 		backend.RefreshKindBackendStatus,
-		testkit.NewRecordingLoader(0, func(context.Context, backend.RefreshKey) (backend.EventPayload, error) {
+		testkit.NewRecordingRefreshHandler(0, func(context.Context, backend.RefreshKey) (backend.EventPayload, error) {
 			return backend.BackendStatusUpdated{}, nil
 		}),
 	)
 	owner := testkit.NewRecordingCloser(nil)
 	application, err := New(context.Background(), Config{
-		EventHub: hub, Refreshes: coordinator, OwnedDockerClient: owner,
+		EventHub: hub, Refreshes: refreshes, Commands: commands, OwnedDockerClient: owner,
 		RefreshPolicies: []backend.RefreshPolicy{{Key: backend.RefreshKey{Kind: backend.RefreshKindBackendStatus}}},
 	})
 	if err == nil || application != nil {
@@ -79,10 +78,10 @@ func TestBackendConstructionFailureClosesOwnedClient(t *testing.T) {
 
 func TestDockerEventPublishesRawObservationAndRefreshesDashboardIndependently(t *testing.T) {
 	key := backend.RefreshKey{Kind: "dashboard.summary"}
-	loader := testkit.NewRecordingLoader(1, func(context.Context, backend.RefreshKey) (backend.EventPayload, error) {
+	handler := testkit.NewRecordingRefreshHandler(1, func(context.Context, backend.RefreshKey) (backend.EventPayload, error) {
 		return backend.BackendStatusUpdated{APIVersion: "dashboard"}, nil
 	})
-	hub, coordinator := runtimeDependencies(t, backend.PageDashboard, key.Kind, loader)
+	hub, refreshes, commands := runtimeDependencies(t, backend.PageDashboard, key.Kind, handler)
 	source := &oneEventSource{
 		release: make(chan struct{}),
 		event: backend.DockerEventObserved{
@@ -90,7 +89,7 @@ func TestDockerEventPublishesRawObservationAndRefreshesDashboardIndependently(t 
 		},
 	}
 	application, err := New(context.Background(), Config{
-		EventHub: hub, Refreshes: coordinator, DockerEvents: source,
+		EventHub: hub, Refreshes: refreshes, Commands: commands, DockerEvents: source,
 	})
 	if err != nil {
 		t.Fatalf("new Backend: %v", err)
@@ -117,16 +116,16 @@ func TestDockerEventPublishesRawObservationAndRefreshesDashboardIndependently(t 
 
 func TestDockerEventsRemainReadableWhileDashboardRefreshIsBlocked(t *testing.T) {
 	gate := testkit.NewGate()
-	loader := testkit.NewRecordingLoader(2, func(ctx context.Context, _ backend.RefreshKey) (backend.EventPayload, error) {
+	handler := testkit.NewRecordingRefreshHandler(2, func(ctx context.Context, _ backend.RefreshKey) (backend.EventPayload, error) {
 		if err := gate.Block(ctx); err != nil {
 			return nil, err
 		}
 		return backend.BackendStatusUpdated{}, nil
 	})
-	hub, coordinator := runtimeDependencies(t, backend.PageDashboard, "dashboard.summary", loader)
+	hub, refreshes, commands := runtimeDependencies(t, backend.PageDashboard, "dashboard.summary", handler)
 	source := &burstEventSource{release: make(chan struct{}), started: make(chan struct{})}
 	application, err := New(context.Background(), Config{
-		EventHub: hub, Refreshes: coordinator, DockerEvents: source,
+		EventHub: hub, Refreshes: refreshes, Commands: commands, DockerEvents: source,
 	})
 	if err != nil {
 		t.Fatalf("new Backend: %v", err)
@@ -212,19 +211,24 @@ func runtimeDependencies(
 	t *testing.T,
 	page backend.Page,
 	kind backend.RefreshKind,
-	loader backend.RefreshLoader,
-) (*eventhub.Hub, *refresh.Coordinator) {
+	handler interface {
+		ReadRefresh(context.Context, backend.RefreshKey) (backend.EventPayload, error)
+	},
+) (*eventhub.Hub, *RefreshManager, *CommandExecutor) {
 	t.Helper()
 	hub := eventhub.New(eventhub.Config{EventHistoryCapacity: 4})
-	catalog := refresh.NewCatalog()
-	if err := catalog.RegisterPage(page, kind, loader); err != nil {
+	manager, err := NewRefreshManager(RefreshManagerConfig{Publisher: hub, Timeout: time.Second})
+	if err != nil {
+		t.Fatalf("new Refresh Manager: %v", err)
+	}
+	if err := manager.RegisterPage(page, kind, handler.ReadRefresh); err != nil {
 		t.Fatalf("register page: %v", err)
 	}
-	coordinator, err := refresh.NewCoordinator(refresh.CoordinatorConfig{Publisher: hub, Catalog: catalog})
+	commands, err := NewCommandExecutor(CommandExecutorConfig{Refreshes: manager, Workers: 1, QueueCapacity: 2, Timeout: time.Second})
 	if err != nil {
-		t.Fatalf("new coordinator: %v", err)
+		t.Fatalf("new Command Executor: %v", err)
 	}
-	return hub, coordinator
+	return hub, manager, commands
 }
 
 func receive(t *testing.T, ctx context.Context, events <-chan backend.EventEnvelope) backend.EventEnvelope {

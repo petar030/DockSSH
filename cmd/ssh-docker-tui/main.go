@@ -25,23 +25,22 @@ func main() {
 	containerID := flag.String("container-id", "", "container ID/name to inspect; defaults to the first listed container")
 	containerAction := flag.String("container-action", "", "optional command: start, stop, restart, pause, unpause, kill, rename, or remove")
 	containerName := flag.String("container-name", "", "new name for -container-action=rename")
-	containerExec := flag.String("container-exec", "", "optional one-shot command to execute in the selected container (space-separated)")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := runSelectedDemo(ctx, *endpoint, *watch, *page, *containerID, *containerAction, *containerName, *containerExec); err != nil && !errors.Is(err, context.Canceled) {
+	if err := runSelectedDemo(ctx, *endpoint, *watch, *page, *containerID, *containerAction, *containerName); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintln(os.Stderr, "ssh-docker-tui:", err)
 		os.Exit(1)
 	}
 }
 
-func runSelectedDemo(ctx context.Context, endpoint string, watch time.Duration, page, requestedID, action, newName, execCommand string) error {
+func runSelectedDemo(ctx context.Context, endpoint string, watch time.Duration, page, requestedID, action, newName string) error {
 	switch strings.ToLower(strings.TrimSpace(page)) {
 	case "containers":
-		return runContainerDemo(ctx, endpoint, watch, requestedID, action, newName, execCommand)
+		return runContainerDemo(ctx, endpoint, watch, requestedID, action, newName)
 	case "all":
-		return runAllDemo(ctx, endpoint, watch, requestedID, action, newName, execCommand)
+		return runAllDemo(ctx, endpoint, watch, requestedID, action, newName)
 	default:
 		return fmt.Errorf("unknown -page %q (choose containers or all)", page)
 	}
@@ -49,7 +48,7 @@ func runSelectedDemo(ctx context.Context, endpoint string, watch time.Duration, 
 
 // runContainerDemo is the isolated manual exercise for the Containers page.
 // It intentionally does not subscribe to or refresh the Dashboard page.
-func runContainerDemo(ctx context.Context, endpoint string, watch time.Duration, requestedID, action, newName, execCommand string) error {
+func runContainerDemo(ctx context.Context, endpoint string, watch time.Duration, requestedID, action, newName string) error {
 	application, err := dockerplatform.NewBackend(ctx, dockerplatform.BackendConfig{Endpoint: endpoint})
 	if err != nil {
 		return err
@@ -64,7 +63,9 @@ func runContainerDemo(ctx context.Context, endpoint string, watch time.Duration,
 	}
 	defer containerEvents.Close()
 	detailsEvents, err := application.Subscribe(ctx, backend.PageContainers, backend.EventFilter{
-		Types: []backend.EventType{containers.EventDetailsUpdated, containers.EventProcessesUpdated},
+		Types: []backend.EventType{
+			containers.EventDetailsUpdated, containers.EventProcessesUpdated, backend.EventRefreshFailed,
+		},
 	})
 	if err != nil {
 		return err
@@ -78,7 +79,7 @@ func runContainerDemo(ctx context.Context, endpoint string, watch time.Duration,
 	}
 	defer liveEvents.Close()
 
-	if err := application.Refresh(ctx, backend.PageContainers); err != nil {
+	if err := application.RequestRefresh(backend.PageContainers); err != nil {
 		return err
 	}
 	select {
@@ -99,9 +100,6 @@ func runContainerDemo(ctx context.Context, endpoint string, watch time.Duration,
 			id = update.Containers[0].ID
 		}
 		if err := inspectContainer(ctx, application, detailsEvents, id); err != nil {
-			return err
-		}
-		if err := runContainerExec(ctx, application, id, execCommand); err != nil {
 			return err
 		}
 		if err := runContainerAction(ctx, application, id, action, newName); err != nil {
@@ -147,7 +145,7 @@ func closeApplication(application *dockerplatform.Application) {
 	_ = application.Close(closeContext)
 }
 
-func runAllDemo(ctx context.Context, endpoint string, watch time.Duration, requestedID, action, newName, execCommand string) error {
+func runAllDemo(ctx context.Context, endpoint string, watch time.Duration, requestedID, action, newName string) error {
 	application, err := dockerplatform.NewBackend(ctx, dockerplatform.BackendConfig{Endpoint: endpoint})
 	if err != nil {
 		return err
@@ -173,7 +171,9 @@ func runAllDemo(ctx context.Context, endpoint string, watch time.Duration, reque
 	}
 	defer containerEvents.Close()
 	containerDetailsEvents, err := application.Subscribe(ctx, backend.PageContainers, backend.EventFilter{
-		Types: []backend.EventType{containers.EventDetailsUpdated, containers.EventProcessesUpdated},
+		Types: []backend.EventType{
+			containers.EventDetailsUpdated, containers.EventProcessesUpdated, backend.EventRefreshFailed,
+		},
 	})
 	if err != nil {
 		return err
@@ -187,7 +187,7 @@ func runAllDemo(ctx context.Context, endpoint string, watch time.Duration, reque
 	}
 	defer liveEvents.Close()
 
-	if err := application.Refresh(ctx, backend.PageDashboard); err != nil {
+	if err := application.RequestRefresh(backend.PageDashboard); err != nil {
 		return err
 	}
 	select {
@@ -204,7 +204,7 @@ func runAllDemo(ctx context.Context, endpoint string, watch time.Duration, reque
 		return ctx.Err()
 	}
 
-	if err := application.Refresh(ctx, backend.PageContainers); err != nil {
+	if err := application.RequestRefresh(backend.PageContainers); err != nil {
 		return err
 	}
 	select {
@@ -223,9 +223,6 @@ func runAllDemo(ctx context.Context, endpoint string, watch time.Duration, reque
 				id = update.Containers[0].ID
 			}
 			if err := inspectContainer(ctx, application, containerDetailsEvents, id); err != nil {
-				return err
-			}
-			if err := runContainerExec(ctx, application, id, execCommand); err != nil {
 				return err
 			}
 			if err := runContainerAction(ctx, application, id, action, newName); err != nil {
@@ -280,26 +277,6 @@ func runAllDemo(ctx context.Context, endpoint string, watch time.Duration, reque
 	}
 }
 
-func runContainerExec(ctx context.Context, application *dockerplatform.Application, id, command string) error {
-	command = strings.TrimSpace(command)
-	if command == "" {
-		return nil
-	}
-	parts := strings.Fields(command)
-	result, err := application.Containers().Exec(ctx, id, containers.ExecOptions{Command: parts})
-	if err != nil {
-		return fmt.Errorf("container exec: %w", err)
-	}
-	fmt.Printf("\nExec exit code: %d\n", result.ExitCode)
-	if result.Stdout != "" {
-		fmt.Printf("  stdout: %s\n", result.Stdout)
-	}
-	if result.Stderr != "" {
-		fmt.Printf("  stderr: %s\n", result.Stderr)
-	}
-	return nil
-}
-
 func inspectContainer(
 	ctx context.Context,
 	application *dockerplatform.Application,
@@ -310,7 +287,7 @@ func inspectContainer(
 	if id == "" {
 		return nil
 	}
-	if err := application.Containers().RefreshDetails(ctx, id); err != nil {
+	if err := application.Containers().RequestDetails(id); err != nil {
 		fmt.Printf("\nContainer details unavailable: %v\n", err)
 		return nil
 	}
@@ -319,14 +296,19 @@ func inspectContainer(
 		if !open {
 			return errors.New("Container details subscription closed")
 		}
-		if details, ok := event.Payload.(containers.DetailsUpdated); ok {
+		switch payload := event.Payload.(type) {
+		case containers.DetailsUpdated:
+			details := payload
 			printContainerDetails(details.Container)
+		case backend.RefreshFailed:
+			fmt.Printf("\nContainer details unavailable: %v\n", payload.Err)
+			return nil
 		}
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 
-	if err := application.Containers().RefreshProcesses(ctx, id); err != nil {
+	if err := application.Containers().RequestProcesses(id); err != nil {
 		fmt.Printf("Processes unavailable: %v\n", err)
 	} else {
 		select {
@@ -334,8 +316,12 @@ func inspectContainer(
 			if !open {
 				return errors.New("Container processes subscription closed")
 			}
-			if processes, ok := event.Payload.(containers.ProcessesUpdated); ok {
+			switch payload := event.Payload.(type) {
+			case containers.ProcessesUpdated:
+				processes := payload
 				printContainerProcesses(processes)
+			case backend.RefreshFailed:
+				fmt.Printf("Processes unavailable: %v\n", payload.Err)
 			}
 		case <-ctx.Done():
 			return ctx.Err()

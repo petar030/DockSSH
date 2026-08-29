@@ -14,7 +14,7 @@ import (
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/eventhub"
 )
 
-func TestLoaderReturnsCompleteDashboardSummary(t *testing.T) {
+func TestAPIReturnsCompleteDashboardSummary(t *testing.T) {
 	history := eventhub.NewHistory(4)
 	eventTime := time.Unix(1_700_000_000, 0)
 	history.Add(backend.EventEnvelope{
@@ -40,12 +40,12 @@ func TestLoaderReturnsCompleteDashboardSummary(t *testing.T) {
 			BuildCache: client.BuildCacheDiskUsage{TotalCount: 6, ActiveCount: 2, TotalSize: 400, Reclaimable: 150},
 		},
 	}
-	loader, err := NewLoader(docker, history)
+	api, err := NewAPI(docker, history)
 	if err != nil {
-		t.Fatalf("new loader: %v", err)
+		t.Fatalf("new API: %v", err)
 	}
 
-	payload, err := loader.Load(context.Background(), backend.RefreshKey{Kind: RefreshKindSummary})
+	payload, err := api.ReadRefresh(context.Background(), backend.RefreshKey{Kind: RefreshKindSummary})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -67,13 +67,13 @@ func TestLoaderReturnsCompleteDashboardSummary(t *testing.T) {
 	}
 }
 
-func TestLoaderReturnsDockerFailure(t *testing.T) {
+func TestAPIReturnsDockerFailure(t *testing.T) {
 	docker := &fakeDockerReader{pingErr: errors.New("daemon unavailable")}
-	loader, err := NewLoader(docker, eventhub.NewHistory(1))
+	api, err := NewAPI(docker, eventhub.NewHistory(1))
 	if err != nil {
-		t.Fatalf("new loader: %v", err)
+		t.Fatalf("new API: %v", err)
 	}
-	if _, err := loader.Load(context.Background(), backend.RefreshKey{Kind: RefreshKindSummary}); err == nil {
+	if _, err := api.ReadRefresh(context.Background(), backend.RefreshKey{Kind: RefreshKindSummary}); err == nil {
 		t.Fatal("load succeeded with a failed Docker ping")
 	}
 }

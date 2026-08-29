@@ -9,16 +9,15 @@ import (
 // Backend is the in-process entry point used by every SSH session. Domain APIs
 // are added to it one slice at a time as their contracts are frozen.
 type Backend interface {
-	Refresh(context.Context, Page) error
+	RequestRefresh(Page) error
 	Subscribe(context.Context, Page, EventFilter) (Subscription, error)
 	Close(context.Context) error
 }
 
-// PageRefreshRequester records backend-owned background refresh work. Domain
-// services and infrastructure producers use it after changes; TUI sessions use
-// the synchronous Backend.Refresh method instead.
-type PageRefreshRequester interface {
-	RequestPage(Page, RefreshReason)
+// RefreshRequester records backend-owned refresh work by its complete key.
+// Requests confirm acceptance; results arrive through the relevant page bus.
+type RefreshRequester interface {
+	Request(RefreshKey, RefreshReason) error
 }
 
 // Page identifies one TUI tab and its independent Event Bus.
@@ -52,7 +51,7 @@ type RefreshKind string
 const RefreshKindBackendStatus RefreshKind = "backend.status"
 
 // RefreshKey identifies a refresh operation and, optionally, one domain item.
-// It stays comparable for loader, scheduler, and filter lookups.
+// It stays comparable for refresh routing, scheduling, and filter lookups.
 type RefreshKey struct {
 	Kind RefreshKind
 	ID   string
@@ -76,25 +75,6 @@ const (
 	RefreshManual           RefreshReason = "manual"
 	RefreshOverflowRecovery RefreshReason = "overflow_recovery"
 )
-
-// RefreshResult confirms that a typed update was published.
-type RefreshResult struct {
-	Key         RefreshKey
-	Sequence    uint64
-	PublishedAt time.Time
-}
-
-// RefreshLoader performs one authoritative read and returns a complete typed
-// page update. Loaders never publish events themselves.
-type RefreshLoader interface {
-	Load(context.Context, RefreshKey) (EventPayload, error)
-}
-
-type RefreshLoaderFunc func(context.Context, RefreshKey) (EventPayload, error)
-
-func (loader RefreshLoaderFunc) Load(ctx context.Context, key RefreshKey) (EventPayload, error) {
-	return loader(ctx, key)
-}
 
 // RefreshPolicy schedules one process-wide refresh independently of session
 // count.
@@ -209,6 +189,23 @@ type CommandResult struct {
 	Affected     []AffectedResource
 	RefreshKeys  []RefreshKey
 	Asynchronous bool
+}
+
+// CommandRequest describes one validated short operation submitted by a page
+// API to the backend-owned command executor. Run must use the context supplied
+// by the executor, never a TUI session context.
+type CommandRequest struct {
+	OperationID string
+	Operation   string
+	Affected    []AffectedResource
+	RefreshKeys []RefreshKey
+	Run         func(context.Context) error
+}
+
+// CommandRunner accepts short commands for backend-owned execution while the
+// caller's context controls only submission and waiting for the result.
+type CommandRunner interface {
+	Run(context.Context, CommandRequest) (CommandResult, error)
 }
 
 // ProgressEvent is one ordered update from a long-running job.

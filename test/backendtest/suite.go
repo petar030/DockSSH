@@ -42,7 +42,7 @@ func RunBackendConformance(t *testing.T, factory BackendFactory, env Integration
 
 		ctx, cancel := context.WithTimeout(context.Background(), env.Timeout)
 		defer cancel()
-		err = instance.Refresh(ctx, backend.PageSystem)
+		err = instance.RequestRefresh(backend.PageSystem)
 		if err != nil {
 			t.Fatalf("refresh backend status: %v", err)
 		}
@@ -69,7 +69,7 @@ func RunBackendConformance(t *testing.T, factory BackendFactory, env Integration
 		if err := first.Close(); err != nil {
 			t.Fatalf("close first observer: %v", err)
 		}
-		if err := instance.Refresh(ctx, backend.PageSystem); err != nil {
+		if err := instance.RequestRefresh(backend.PageSystem); err != nil {
 			t.Fatalf("refresh after first observer closed: %v", err)
 		}
 		if event := receiveEvent(t, ctx, second.Events()); event.Payload.EventType() != backend.EventBackendStatusUpdated {
@@ -112,7 +112,7 @@ func RunBackendConformance(t *testing.T, factory BackendFactory, env Integration
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), env.Timeout)
 		defer cancel()
-		if err := instance.Refresh(ctx, backend.PageDashboard); err != nil {
+		if err := instance.RequestRefresh(backend.PageDashboard); err != nil {
 			t.Fatalf("refresh Dashboard: %v", err)
 		}
 		event := receiveEvent(t, ctx, subscription.Events())
