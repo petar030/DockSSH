@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
+	composepage "github.com/petar030/ssh-native-docker-tui/internal/backend/compose"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/dashboard"
 	dockerplatform "github.com/petar030/ssh-native-docker-tui/internal/platform/docker"
@@ -228,6 +229,134 @@ func TestDockerContainerEventRefreshesContainersPage(t *testing.T) {
 	}
 }
 
+func TestComposeSliceAgainstDocker(t *testing.T) {
+	fixture := dockerfixture.New(t)
+	environment := fixture.Environment()
+	projectName, configPath, err := fixture.CreateComposeConfig("slice-three", []string{
+		"sh", "-c", "while true; do echo slice3-log; sleep 1; done",
+	})
+	if err != nil {
+		t.Fatalf("create Compose fixture: %v", err)
+	}
+	fixture.TrackComposeProject(projectName)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*environment.Timeout)
+	defer cancel()
+	application, err := dockerplatform.NewBackend(ctx, dockerplatform.BackendConfig{
+		Endpoint: environment.DockerEndpoint, ComposeRoots: []string{environment.ComposeRoot},
+	})
+	if err != nil {
+		t.Fatalf("construct production backend: %v", err)
+	}
+	t.Cleanup(func() { _ = application.Close(context.Background()) })
+
+	listSubscription, err := application.Subscribe(ctx, backend.PageCompose, backend.EventFilter{
+		Types: []backend.EventType{composepage.EventProjectsUpdated},
+	})
+	if err != nil {
+		t.Fatalf("subscribe to Compose list: %v", err)
+	}
+	detailsSubscription, err := application.Subscribe(ctx, backend.PageCompose, backend.EventFilter{
+		Types: []backend.EventType{composepage.EventProjectUpdated},
+	})
+	if err != nil {
+		t.Fatalf("subscribe to Compose details: %v", err)
+	}
+
+	spec := composepage.ProjectSpec{Name: projectName, ConfigFiles: []string{configPath}}
+	upJob, err := application.Compose().Up(ctx, spec, composepage.UpOptions{})
+	if err != nil {
+		t.Fatalf("start Compose up: %v", err)
+	}
+	if _, err := upJob.Wait(ctx); err != nil {
+		t.Fatalf("wait for Compose up: %v", err)
+	}
+	waitForComposeProject(t, ctx, listSubscription.Events(), projectName, true)
+
+	if err := application.Compose().RequestDetails(projectName); err != nil {
+		t.Fatalf("request Compose details: %v", err)
+	}
+	detailsEvent := waitForEventType(t, ctx, detailsSubscription.Events(), composepage.EventProjectUpdated)
+	details := detailsEvent.Payload.(composepage.ProjectUpdated).Project
+	if details.Name != projectName || len(details.Services) != 1 || details.Services[0].Name != "web" || len(details.Containers) != 1 {
+		t.Fatalf("Compose details = %#v", details)
+	}
+
+	logsCtx, cancelLogs := context.WithTimeout(ctx, 5*time.Second)
+	logs, err := application.Compose().Logs(logsCtx, projectName, composepage.LogsOptions{Follow: true, Tail: 10})
+	if err != nil {
+		cancelLogs()
+		t.Fatalf("open Compose logs: %v", err)
+	}
+	select {
+	case entry := <-logs.Values():
+		if !strings.Contains(entry.Data, "slice3-log") {
+			t.Fatalf("Compose log entry = %#v", entry)
+		}
+	case <-logsCtx.Done():
+		t.Fatalf("wait for Compose logs: %v", logsCtx.Err())
+	}
+	_ = logs.Close()
+	cancelLogs()
+	waitForStreamDone(t, ctx, logs.Done())
+
+	result, commandErr := application.Compose().Pause(ctx, projectName, composepage.ServiceOptions{})
+	assertComposeCommand(t, result, commandErr)
+	result, commandErr = application.Compose().Unpause(ctx, projectName, composepage.ServiceOptions{})
+	assertComposeCommand(t, result, commandErr)
+	result, commandErr = application.Compose().Restart(ctx, projectName, composepage.RestartOptions{})
+	assertComposeCommand(t, result, commandErr)
+	result, commandErr = application.Compose().Stop(ctx, projectName, composepage.StopOptions{})
+	assertComposeCommand(t, result, commandErr)
+	result, commandErr = application.Compose().Start(ctx, projectName, composepage.ServiceOptions{})
+	assertComposeCommand(t, result, commandErr)
+	result, commandErr = application.Compose().Scale(ctx, spec, composepage.ScaleOptions{Service: "web", Replicas: 1})
+	assertComposeCommand(t, result, commandErr)
+
+	downJob, err := application.Compose().Down(ctx, projectName, composepage.DownOptions{RemoveOrphans: true, Volumes: true})
+	if err != nil {
+		t.Fatalf("start Compose down: %v", err)
+	}
+	if _, err := downJob.Wait(ctx); err != nil {
+		t.Fatalf("wait for Compose down: %v", err)
+	}
+	waitForComposeProject(t, ctx, listSubscription.Events(), projectName, false)
+}
+
+func assertComposeCommand(t *testing.T, result backend.CommandResult, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("Compose command: %v", err)
+	}
+	if !strings.HasPrefix(result.OperationID, "compose.") || len(result.Affected) != 1 {
+		t.Fatalf("Compose command result = %#v", result)
+	}
+}
+
+func waitForComposeProject(
+	t *testing.T,
+	ctx context.Context,
+	events <-chan backend.EventEnvelope,
+	projectName string,
+	present bool,
+) composepage.ProjectsUpdated {
+	t.Helper()
+	for {
+		event := receiveIntegrationEvent(t, ctx, events)
+		update, ok := event.Payload.(composepage.ProjectsUpdated)
+		if !ok {
+			continue
+		}
+		found := false
+		for _, project := range update.Projects {
+			found = found || project.Name == projectName
+		}
+		if found == present {
+			return update
+		}
+	}
+}
+
 func assertContainerCommand(t *testing.T, operation string, result backend.CommandResult, err error) {
 	t.Helper()
 	if err != nil {
@@ -324,6 +453,6 @@ func productionBackendFactory(
 	environment backendtest.IntegrationEnvironment,
 ) (backend.Backend, error) {
 	return dockerplatform.NewBackend(ctx, dockerplatform.BackendConfig{
-		Endpoint: environment.DockerEndpoint,
+		Endpoint: environment.DockerEndpoint, ComposeRoots: []string{environment.ComposeRoot},
 	})
 }

@@ -91,6 +91,8 @@ const (
 	EventDockerObserved       EventType = "docker_event_observed"
 	EventRefreshFailed        EventType = "refresh_failed"
 	EventSubscriberOverflow   EventType = "subscriber_overflow"
+	EventJobProgressed        EventType = "job_progressed"
+	EventJobFinished          EventType = "job_finished"
 )
 
 // EventPayload is one complete observation delivered to interested sessions.
@@ -225,6 +227,51 @@ type JobResult struct {
 	Affected    []AffectedResource
 	RefreshKeys []RefreshKey
 	CompletedAt time.Time
+}
+
+// JobProgressed broadcasts one job update to every interested subscriber on
+// the owning page bus.
+type JobProgressed struct {
+	JobID       string
+	OperationID string
+	Progress    ProgressEvent
+}
+
+func (JobProgressed) EventType() EventType { return EventJobProgressed }
+
+// JobFinished broadcasts the reliable terminal job outcome. Err is nil on
+// success; authoritative resource state still arrives through refresh events.
+type JobFinished struct {
+	OperationID string
+	Result      JobResult
+	Err         error
+}
+
+func (JobFinished) EventType() EventType { return EventJobFinished }
+
+func (event JobFinished) CloneEventPayload() EventPayload {
+	event.Result.Affected = append([]AffectedResource(nil), event.Result.Affected...)
+	event.Result.RefreshKeys = append([]RefreshKey(nil), event.Result.RefreshKeys...)
+	return event
+}
+
+// JobRequest describes one validated long operation. Once accepted, Run uses
+// a backend-owned context and may report best-effort progress without blocking
+// the operation.
+type JobRequest struct {
+	Page        Page
+	OperationID string
+	Operation   string
+	ConflictKey string
+	Affected    []AffectedResource
+	RefreshKeys []RefreshKey
+	Run         func(context.Context, func(ProgressEvent)) error
+}
+
+// JobRunner starts bounded backend-owned long operations. The submission
+// context controls acceptance only; accepted work outlives its initiating TUI.
+type JobRunner interface {
+	Start(context.Context, JobRequest) (Job, error)
 }
 
 // Job exposes progress, cancellation, and exactly one terminal outcome.

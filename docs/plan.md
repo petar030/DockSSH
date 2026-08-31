@@ -65,6 +65,7 @@ Docker daemon is a different OS process.
 │  │                                      v                                      │  │
 │  │ Bounded Command Executor ─────> shared Moby client                          │  │
 │  │ fixed worker pool                    │                                      │  │
+│  │ Bounded active Job Executor ───> shared Compose service                     │  │
 │  └──────────────────────────────────────┼──────────────────────────────────────┘  │
 │                                         │                                         │
 │  Event Hub page buses ── typed events ──┼──> matching TUI subscriptions           │
@@ -116,7 +117,7 @@ type Backend interface {
 }
 ```
 
-Domain accessors such as `Containers()` expose their page API. Dashboard is
+Domain accessors such as `Containers()` and `Compose()` expose their page API. Dashboard is
 read-only and needs no separate public accessor because its data arrives from a
 page refresh subscription.
 
@@ -234,8 +235,8 @@ from blocking after disconnection.
 The queue has a fixed capacity. When full, submission returns a stable conflict
 or busy error. Independent commands run concurrently up to the fixed worker
 count. Docker Engine remains responsible for resource-level concurrency.
-Future Compose code may add narrow per-project conflict protection if real
-behavior requires it.
+Long Compose jobs use separate narrow per-project conflict protection; short
+commands remain governed by Docker/Compose itself.
 
 Production defaults are four workers, 32 queued commands and a 30-second
 per-command timeout; all are configurable at bootstrap.
@@ -308,19 +309,33 @@ or `RefreshFailed` arrives through `Subscribe`.
 
 ### Page API inventory
 
-| Page | TUI-facing API | Runtime-only handler | Status |
-| --- | --- | --- | --- |
-| Dashboard | Subscribe to `PageDashboard`; `Backend.RequestRefresh(PageDashboard)` | `Dashboard.RefreshHandler.ReadRefresh` | Implemented, read-only |
-| Containers | `RequestDetails`, `RequestProcesses`, `Start`, `Stop`, `Restart`, `Pause`, `Unpause`, `Kill`, `Rename`, `Remove`, `Logs`, `Stats` | `Containers.API.ReadRefresh` | Implemented |
-| Compose | Project/service refresh requests, short lifecycle commands, logs, future job submission/progress subscription | `Compose.API.ReadRefresh` | Planned in Slice 3 |
-| Images | List/details refresh requests, tag/remove/scoped-prune commands, future pull-job API | `Images.API.ReadRefresh` | Planned in Slice 4 |
-| Volumes | List/details/attached-container refresh requests, create/remove/scoped-prune commands | `Volumes.API.ReadRefresh` | Planned in Slice 5 |
-| Networks | List/details/connected-container refresh requests, create/remove/connect/disconnect/scoped-prune commands | `Networks.API.ReadRefresh` | Planned in Slice 6 |
-| Events | Session-local event filtering and page subscription controls | Any future authoritative Events-page handler | Planned in Slice 7; raw Docker events remain runtime-owned |
-| System | System refresh requests and deliberately scoped prune commands | `System.API.ReadRefresh` | Planned in Slice 8 |
+Every page first subscribes with `Backend.Subscribe(ctx, Page..., filter)`.
+Every page can request its base/list update through
+`Backend.RequestRefresh(Page...)`. That common call is a **refresh**, not a
+page-specific method. The table below shows the additional page methods and
+which backend mechanism handles each one.
 
-This inventory describes page responsibilities, not prematurely frozen Go
-method names for unimplemented slices. Each slice defines its exact exported
+| Page | Refreshes → Refresh Manager → page Event Hub | Short commands → Command Executor | Long jobs → Job Executor | Session streams | Runtime refresh handler | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| Dashboard | Base summary refresh only | None | None | None | `Dashboard.RefreshHandler.ReadRefresh` | Implemented, read-only |
+| Containers | Base list; `RequestDetails`; `RequestProcesses` | `Start`, `Stop`, `Restart`, `Pause`, `Unpause`, `Kill`, `Rename`, `Remove` | None | `Logs`, `Stats` | `Containers.API.ReadRefresh` | Implemented |
+| Compose | Base project list; `RequestDetails` | `Start`, `Stop`, `Restart`, `Pause`, `Unpause`, `Scale` | `Up`, `Down`, `Pull`, `Build` | `Logs` | `Compose.API.ReadRefresh` | Implemented; interactive exec deferred |
+| Images | Base list and targeted details (exact methods defined in Slice 4) | Tag, remove, safely scoped prune | Pull | None currently planned | `Images.API.ReadRefresh` | Planned in Slice 4 |
+| Volumes | Base list, targeted details, attached-container view | Create, remove, safely scoped prune | None currently planned | None currently planned | `Volumes.API.ReadRefresh` | Planned in Slice 5 |
+| Networks | Base list, targeted details, connected-container view | Create, remove, connect, disconnect, safely scoped prune | None currently planned | None currently planned | `Networks.API.ReadRefresh` | Planned in Slice 6 |
+| Events | Subscription/filter changes only; Docker listener publishes raw observations | None | None | The page subscription itself is the live event feed | Future authoritative handler only if needed | Planned in Slice 7; Docker listener remains runtime-owned |
+| System | Docker/system and disk-usage refreshes | Deliberately scoped prune operations | None currently planned | None currently planned | `System.API.ReadRefresh` | Planned in Slice 8 |
+
+**Refreshes** never return Docker data directly to the caller. The Refresh
+Manager performs the read in backend-owned work and publishes a typed update to
+the relevant page Event Hub. **Short commands** return a `CommandResult` after
+their worker finishes, then request affected refreshes. **Jobs** return a
+`Job` handle immediately after backend acceptance; progress and completion are
+published to the page Event Hub, and `Job.Wait` provides the terminal result.
+**Streams** are direct, session-owned readers and do not use either executor.
+
+For unimplemented pages this inventory intentionally describes capabilities,
+not prematurely frozen Go method names. Each slice defines its exact exported
 DTO/options/API contracts test-first in `types.go` and `api_test.go`.
 
 ### Implemented page details
@@ -335,6 +350,14 @@ publishes `SummaryUpdated`.
 on `PageContainers`; their results remain typed page events, filtered by full
 `{kind, ID}` keys when needed. Short commands are submitted to the shared
 executor. Logs and stats are session-owned streams.
+
+**Compose.** The TUI calls the methods listed above through
+`application.Compose()`. `Backend.RequestRefresh(PageCompose)` loads the active
+project list; `RequestDetails(name)` loads one active project's definition,
+services and containers. File-based scale/up/pull/build operations require an
+explicit `ProjectSpec`; every config file must resolve beneath a configured
+`ComposeRoots` directory. Short lifecycle operations use `CommandExecutor`,
+logs are session-owned, and long operations use `JobExecutor`.
 
 The current implemented packages are therefore:
 
@@ -352,6 +375,18 @@ internal/backend/containers/
 ├── streams.go
 ├── types.go
 ├── errors.go
+└── api_test.go
+
+internal/backend/compose/
+├── api.go
+├── commands.go
+├── docker.go
+├── errors.go
+├── jobs.go
+├── paths.go
+├── refresh.go
+├── streams.go
+├── types.go
 └── api_test.go
 ```
 
@@ -375,20 +410,26 @@ events.
 
 ### Session-owned streams
 
-Container logs and stats use the session/view context directly. Closing the
+Container logs/stats and Compose logs use the session/view context directly. Closing the
 stream, leaving the view or disconnecting closes the Docker reader and stream
 goroutine. Streams do not use the command queue or Refresh Manager.
 
-Container exec is not part of this version. A future interactive terminal may
-be designed explicitly as a session-owned bidirectional stream.
+Container exec is not part of this version. Compose exec is also deferred. A
+future interactive terminal must be designed explicitly as a session-owned
+bidirectional stream rather than being forced into a short command.
 
 ### Long-running jobs
 
-Future Compose up/build/pull and image pull operations use a backend-owned job
-abstraction rather than the short-command queue. A bounded job registry owns
-operation lifetime; a TUI owns only its progress subscription and wait. Job
-completion requests affected Refresh Manager keys. The job runtime is added in
-the relevant later slice, not prebuilt now.
+Compose up/down/pull/build use one backend-owned `JobExecutor`, separate from
+the short-command queue. It permits four active jobs by default and rejects new
+work when full. There is no waiting job queue. One conflict key prevents two
+long jobs from mutating the same Compose project concurrently.
+
+Accepted work uses backend lifetime. The initiating TUI receives a `Job` handle
+with best-effort progress, cancellation and reliable `Wait`. Progress and
+terminal `JobFinished` events are also broadcast on `PageCompose`, so other
+subscribed sessions observe the same operation. Completion requests all
+declared Refresh Manager keys. Image pull can reuse this executor in Slice 4.
 
 ## Docker event ingestion
 
@@ -415,7 +456,7 @@ state.
 | Recent normalized Docker events | Event Hub history | Bounded process lifetime |
 | Pending refresh keys | Refresh Manager | Until handled/shutdown |
 | Accepted short commands | Command Executor | Until completion/timeout/shutdown |
-| Future active jobs | Job runtime | Until completion/cancellation/shutdown |
+| Active jobs and per-project conflict keys | Job Executor | Until completion/cancellation/shutdown |
 | Logs and stats | Initiating TUI session | View/session lifetime |
 
 Operational queue and subscription state is necessary coordination state; it is
@@ -486,10 +527,11 @@ This subscribe-before-request ordering avoids missing the initial result.
 
 1. Reject new facade requests and stop scheduler/event producers.
 2. Cancel and wait for Command Executor workers.
-3. Cancel and wait for the Refresh Manager worker.
-4. End SSH sessions so their subscriptions and streams close.
-5. Close the Event Hub.
-6. Close the shared Moby client exactly once.
+3. Cancel and wait for active Job Executor operations.
+4. Cancel and wait for the Refresh Manager worker.
+5. End SSH sessions so their subscriptions and streams close.
+6. Close the Event Hub.
+7. Close the shared Moby client exactly once.
 
 Every owned goroutine and reader must terminate under race and leak checks.
 

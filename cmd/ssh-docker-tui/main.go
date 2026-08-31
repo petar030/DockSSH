@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
+	composepage "github.com/petar030/ssh-native-docker-tui/internal/backend/compose"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/dashboard"
 	dockerplatform "github.com/petar030/ssh-native-docker-tui/internal/platform/docker"
@@ -25,24 +27,247 @@ func main() {
 	containerID := flag.String("container-id", "", "container ID/name to inspect; defaults to the first listed container")
 	containerAction := flag.String("container-action", "", "optional command: start, stop, restart, pause, unpause, kill, rename, or remove")
 	containerName := flag.String("container-name", "", "new name for -container-action=rename")
+	composeProject := flag.String("compose-project", "", "Compose project name; defaults to the first active project")
+	composeFile := flag.String("compose-file", "", "Compose config file used by up, pull, build, and scale")
+	composeAction := flag.String("compose-action", "", "optional action: start, stop, restart, pause, unpause, scale, up, down, pull, build, or logs")
+	composeService := flag.String("compose-service", "", "optional Compose service selected by an action")
+	composeReplicas := flag.Int("compose-replicas", 1, "replica count for -compose-action=scale")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := runSelectedDemo(ctx, *endpoint, *watch, *page, *containerID, *containerAction, *containerName); err != nil && !errors.Is(err, context.Canceled) {
+	if err := runSelectedDemo(
+		ctx, *endpoint, *watch, *page, *containerID, *containerAction, *containerName,
+		*composeProject, *composeFile, *composeAction, *composeService, *composeReplicas,
+	); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintln(os.Stderr, "ssh-docker-tui:", err)
 		os.Exit(1)
 	}
 }
 
-func runSelectedDemo(ctx context.Context, endpoint string, watch time.Duration, page, requestedID, action, newName string) error {
+func runSelectedDemo(
+	ctx context.Context,
+	endpoint string,
+	watch time.Duration,
+	page, requestedID, action, newName string,
+	composeProject, composeFile, composeAction, composeService string,
+	composeReplicas int,
+) error {
 	switch strings.ToLower(strings.TrimSpace(page)) {
 	case "containers":
 		return runContainerDemo(ctx, endpoint, watch, requestedID, action, newName)
 	case "all":
 		return runAllDemo(ctx, endpoint, watch, requestedID, action, newName)
+	case "compose":
+		return runComposeDemo(ctx, endpoint, watch, composeProject, composeFile, composeAction, composeService, composeReplicas)
 	default:
-		return fmt.Errorf("unknown -page %q (choose containers or all)", page)
+		return fmt.Errorf("unknown -page %q (choose containers, compose, or all)", page)
+	}
+}
+
+func runComposeDemo(
+	ctx context.Context,
+	endpoint string,
+	watch time.Duration,
+	requestedProject, configFile, action, service string,
+	replicas int,
+) error {
+	var roots []string
+	if strings.TrimSpace(configFile) != "" {
+		absolute, err := filepath.Abs(configFile)
+		if err != nil {
+			return err
+		}
+		configFile = absolute
+		roots = []string{filepath.Dir(absolute)}
+	}
+	application, err := dockerplatform.NewBackend(ctx, dockerplatform.BackendConfig{
+		Endpoint: endpoint, ComposeRoots: roots,
+	})
+	if err != nil {
+		return err
+	}
+	defer closeApplication(application)
+
+	listEvents, err := application.Subscribe(ctx, backend.PageCompose, backend.EventFilter{
+		Types: []backend.EventType{composepage.EventProjectsUpdated},
+	})
+	if err != nil {
+		return err
+	}
+	defer listEvents.Close()
+	detailsEvents, err := application.Subscribe(ctx, backend.PageCompose, backend.EventFilter{
+		Types: []backend.EventType{composepage.EventProjectUpdated, backend.EventRefreshFailed},
+	})
+	if err != nil {
+		return err
+	}
+	defer detailsEvents.Close()
+
+	if err := application.RequestRefresh(backend.PageCompose); err != nil {
+		return err
+	}
+	event, err := waitForDemoEvent(ctx, listEvents.Events())
+	if err != nil {
+		return err
+	}
+	update := event.Payload.(composepage.ProjectsUpdated)
+	fmt.Printf("Compose projects (%d):\n", len(update.Projects))
+	for _, project := range update.Projects {
+		fmt.Printf("  %-24s %-12s %s\n", project.Name, project.Status, strings.Join(project.ConfigFiles, ","))
+	}
+
+	projectName := strings.TrimSpace(requestedProject)
+	if projectName == "" && len(update.Projects) > 0 {
+		projectName = update.Projects[0].Name
+	}
+	action = strings.ToLower(strings.TrimSpace(action))
+	if projectName == "" && action != "" {
+		return errors.New("-compose-project is required when no active Compose project exists")
+	}
+	services := cleanCLIValues(service)
+	spec := composepage.ProjectSpec{Name: projectName}
+	if configFile != "" {
+		spec.ConfigFiles = []string{configFile}
+	}
+
+	if action == "" {
+		if projectName == "" {
+			return nil
+		}
+		if err := application.Compose().RequestDetails(projectName); err != nil {
+			return err
+		}
+		detailsEvent, err := waitForDemoEvent(ctx, detailsEvents.Events())
+		if err != nil {
+			return err
+		}
+		if failure, ok := detailsEvent.Payload.(backend.RefreshFailed); ok {
+			return failure.Err
+		}
+		printComposeDetails(detailsEvent.Payload.(composepage.ProjectUpdated).Project)
+		return nil
+	}
+
+	var commandResult backend.CommandResult
+	switch action {
+	case "start":
+		commandResult, err = application.Compose().Start(ctx, projectName, composepage.ServiceOptions{Services: services})
+	case "stop":
+		commandResult, err = application.Compose().Stop(ctx, projectName, composepage.StopOptions{Services: services})
+	case "restart":
+		commandResult, err = application.Compose().Restart(ctx, projectName, composepage.RestartOptions{Services: services})
+	case "pause":
+		commandResult, err = application.Compose().Pause(ctx, projectName, composepage.ServiceOptions{Services: services})
+	case "unpause":
+		commandResult, err = application.Compose().Unpause(ctx, projectName, composepage.ServiceOptions{Services: services})
+	case "scale":
+		if len(services) != 1 || configFile == "" {
+			return errors.New("scale requires one -compose-service and -compose-file")
+		}
+		commandResult, err = application.Compose().Scale(ctx, spec, composepage.ScaleOptions{Service: services[0], Replicas: replicas})
+	case "logs":
+		return printComposeLogs(ctx, application, projectName, services, watch)
+	case "up", "down", "pull", "build":
+		return runComposeJob(ctx, application, action, spec, services)
+	default:
+		return fmt.Errorf("unknown Compose action %q", action)
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Compose command accepted: %s affected=%v\n", commandResult.OperationID, commandResult.Affected)
+	return nil
+}
+
+func runComposeJob(ctx context.Context, application *dockerplatform.Application, action string, spec composepage.ProjectSpec, services []string) error {
+	var (
+		job backend.Job
+		err error
+	)
+	switch action {
+	case "up":
+		if len(spec.ConfigFiles) == 0 {
+			return errors.New("up requires -compose-file")
+		}
+		job, err = application.Compose().Up(ctx, spec, composepage.UpOptions{Services: services})
+	case "down":
+		job, err = application.Compose().Down(ctx, spec.Name, composepage.DownOptions{Services: services})
+	case "pull":
+		if len(spec.ConfigFiles) == 0 {
+			return errors.New("pull requires -compose-file")
+		}
+		job, err = application.Compose().Pull(ctx, spec, composepage.PullOptions{Services: services})
+	case "build":
+		if len(spec.ConfigFiles) == 0 {
+			return errors.New("build requires -compose-file")
+		}
+		job, err = application.Compose().Build(ctx, spec, composepage.BuildOptions{Services: services})
+	}
+	if err != nil {
+		return err
+	}
+	for progress := range job.Progress() {
+		fmt.Printf("[%s] %s\n", progress.Status, progress.Message)
+	}
+	result, err := job.Wait(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Compose job completed: %s\n", result.JobID)
+	return nil
+}
+
+func printComposeLogs(ctx context.Context, application *dockerplatform.Application, projectName string, services []string, watch time.Duration) error {
+	streamCtx := ctx
+	cancel := func() {}
+	if watch > 0 {
+		streamCtx, cancel = context.WithTimeout(ctx, watch)
+	}
+	defer cancel()
+	stream, err := application.Compose().Logs(streamCtx, projectName, composepage.LogsOptions{
+		Services: services, Follow: watch > 0, Tail: 20,
+	})
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
+	for entry := range stream.Values() {
+		fmt.Printf("[%s] %-20s %s", entry.Source, entry.Container, entry.Data)
+		if !strings.HasSuffix(entry.Data, "\n") {
+			fmt.Println()
+		}
+	}
+	return <-stream.Done()
+}
+
+func printComposeDetails(project composepage.ProjectDetails) {
+	fmt.Printf("\nCompose project: %s (%s)\n", project.Name, project.Status)
+	for _, service := range project.Services {
+		fmt.Printf("  %-20s image=%-20s replicas=%d/%d containers=%d\n",
+			service.Name, service.Image, service.Replicas, service.Desired, len(service.Containers))
+	}
+}
+
+func cleanCLIValues(value string) []string {
+	var result []string
+	for _, item := range strings.Split(value, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func waitForDemoEvent(ctx context.Context, events <-chan backend.EventEnvelope) (backend.EventEnvelope, error) {
+	select {
+	case event, open := <-events:
+		if !open {
+			return backend.EventEnvelope{}, errors.New("page subscription closed")
+		}
+		return event, nil
+	case <-ctx.Done():
+		return backend.EventEnvelope{}, ctx.Err()
 	}
 }
 

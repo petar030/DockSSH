@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
+	composepage "github.com/petar030/ssh-native-docker-tui/internal/backend/compose"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/eventhub"
 )
@@ -17,11 +18,13 @@ type Config struct {
 	EventHub          *eventhub.Hub
 	Refreshes         *RefreshManager
 	Commands          *CommandExecutor
+	Jobs              *JobExecutor
 	RefreshPolicies   []backend.RefreshPolicy
 	DockerEvents      DockerEventSource
 	DockerEventRetry  time.Duration
 	OwnedDockerClient io.Closer
 	Containers        *containers.API
+	Compose           *composepage.API
 }
 
 // Backend is the process-wide facade shared by every TUI session. It routes
@@ -30,9 +33,11 @@ type Backend struct {
 	events     *eventhub.Hub
 	refreshes  *RefreshManager
 	commands   *CommandExecutor
+	jobs       *JobExecutor
 	scheduler  *Scheduler
 	owner      io.Closer
 	containers *containers.API
+	compose    *composepage.API
 
 	runCancel context.CancelFunc
 	runDone   chan error
@@ -48,12 +53,12 @@ type Backend struct {
 // caller's context and ends only during Backend.Close.
 func New(ctx context.Context, config Config) (*Backend, error) {
 	if ctx == nil || config.EventHub == nil || config.Refreshes == nil || config.Commands == nil {
-		closeRuntimeDependencies(config.Commands, config.Refreshes, config.EventHub)
+		closeRuntimeDependencies(config.Commands, config.Jobs, config.Refreshes, config.EventHub)
 		closeOwned(config.OwnedDockerClient)
 		return nil, &backend.AppError{Code: backend.ErrorInvalidInput, Operation: "create backend runtime"}
 	}
 	if err := ctx.Err(); err != nil {
-		closeRuntimeDependencies(config.Commands, config.Refreshes, config.EventHub)
+		closeRuntimeDependencies(config.Commands, config.Jobs, config.Refreshes, config.EventHub)
 		closeOwned(config.OwnedDockerClient)
 		return nil, canceledError("create backend runtime", err)
 	}
@@ -62,14 +67,14 @@ func New(ctx context.Context, config Config) (*Backend, error) {
 	}
 	scheduler, err := NewScheduler(config.Clock, config.Refreshes, config.RefreshPolicies)
 	if err != nil {
-		closeRuntimeDependencies(config.Commands, config.Refreshes, config.EventHub)
+		closeRuntimeDependencies(config.Commands, config.Jobs, config.Refreshes, config.EventHub)
 		closeOwned(config.OwnedDockerClient)
 		return nil, err
 	}
 
 	application := &Backend{
-		events: config.EventHub, refreshes: config.Refreshes, commands: config.Commands,
-		scheduler: scheduler, owner: config.OwnedDockerClient, containers: config.Containers,
+		events: config.EventHub, refreshes: config.Refreshes, commands: config.Commands, jobs: config.Jobs,
+		scheduler: scheduler, owner: config.OwnedDockerClient, containers: config.Containers, compose: config.Compose,
 		runDone: make(chan error, 1), closeDone: make(chan struct{}),
 	}
 	runContext, runCancel := context.WithCancel(context.Background())
@@ -83,7 +88,7 @@ func New(ctx context.Context, config Config) (*Backend, error) {
 		if listenerErr != nil {
 			runCancel()
 			<-application.runDone
-			closeRuntimeDependencies(config.Commands, config.Refreshes, config.EventHub)
+			closeRuntimeDependencies(config.Commands, config.Jobs, config.Refreshes, config.EventHub)
 			closeOwned(config.OwnedDockerClient)
 			return nil, listenerErr
 		}
@@ -109,6 +114,10 @@ func (application *Backend) Subscribe(
 
 func (application *Backend) Containers() *containers.API {
 	return application.containers
+}
+
+func (application *Backend) Compose() *composepage.API {
+	return application.compose
 }
 
 func (application *Backend) handleDockerEvent(_ context.Context, event backend.DockerEventObserved) {
@@ -144,6 +153,10 @@ func (application *Backend) shutdown() {
 		listenerErr = <-application.eventDone
 	}
 	commandErr := application.commands.Close(context.Background())
+	var jobErr error
+	if application.jobs != nil {
+		jobErr = application.jobs.Close(context.Background())
+	}
 	refreshErr := application.refreshes.Close(context.Background())
 	eventErr := application.events.Close()
 	var ownerErr error
@@ -151,7 +164,7 @@ func (application *Backend) shutdown() {
 		ownerErr = application.owner.Close()
 	}
 	application.closeMu.Lock()
-	application.closeErr = errors.Join(schedulerErr, listenerErr, commandErr, refreshErr, eventErr, ownerErr)
+	application.closeErr = errors.Join(schedulerErr, listenerErr, commandErr, jobErr, refreshErr, eventErr, ownerErr)
 	application.closeMu.Unlock()
 	close(application.closeDone)
 }
@@ -166,9 +179,12 @@ func closeOwned(owner io.Closer) {
 	}
 }
 
-func closeRuntimeDependencies(commands *CommandExecutor, refreshes *RefreshManager, events *eventhub.Hub) {
+func closeRuntimeDependencies(commands *CommandExecutor, jobs *JobExecutor, refreshes *RefreshManager, events *eventhub.Hub) {
 	if commands != nil {
 		_ = commands.Close(context.Background())
+	}
+	if jobs != nil {
+		_ = jobs.Close(context.Background())
 	}
 	if refreshes != nil {
 		_ = refreshes.Close(context.Background())

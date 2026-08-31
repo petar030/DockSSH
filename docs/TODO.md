@@ -49,14 +49,15 @@ TODO list for development
 
 ## Slice 3: Compose tab
 
-- [ ] Define Compose project DTOs, options, streams, jobs, and API contracts
-- [ ] Test and implement the Compose project list window
-- [ ] Test and implement project loading and validation from allowed directories
-- [ ] Test and implement the Compose project details and services windows
-- [ ] Test and implement start, stop, restart, pause, unpause, exec, and scale actions
-- [ ] Test and implement up, down, pull, and build jobs with progress
-- [ ] Test and implement Compose logs
-- [ ] Verify project refreshes from Compose jobs and labeled Docker events
+- [x] Define Compose project DTOs, options, streams, jobs, and API contracts
+- [x] Test and implement the Compose project list window
+- [x] Test and implement project loading and validation from allowed directories
+- [x] Test and implement the Compose project details and services windows
+- [x] Test and implement start, stop, restart, pause, unpause, and scale actions
+- [ ] Design interactive Compose exec as an explicit bidirectional session stream; deferred because it does not fit short commands or one-way logs
+- [x] Test and implement up, down, pull, and build jobs with progress
+- [x] Test and implement Compose logs
+- [x] Verify project refreshes from Compose jobs and labeled Docker events
 
 ## Slice 4: Images tab
 
@@ -111,3 +112,10 @@ TODO list for development
 - [ ] Pass all unit and integration tests with the race detector
 - [ ] Confirm integration cleanup leaves no test resources behind
 - [ ] Complete the top-level Backend facade and full production conformance suite
+
+## Future nice-to-have: fuller Compose invocation options
+
+- [ ] Support an explicit Compose project name (`-p` / `--project-name`) and use the resolved name for per-project job conflict protection
+- [ ] Support Compose profiles
+- [ ] Support custom environment variables and `.env` file selection
+- [ ] Support an explicit Compose project directory

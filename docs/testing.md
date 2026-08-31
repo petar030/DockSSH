@@ -15,15 +15,14 @@ internal/backend/                 production contracts and behavior
 │   ├── backend.go                process-wide facade and shutdown
 │   ├── refresh_manager.go        refresh routing, pending work and publication
 │   ├── command_executor.go       bounded FIFO queue and fixed workers
+│   ├── job_executor.go           bounded active jobs and page progress events
 │   ├── scheduler.go              periodic refresh requests
 │   └── docker_events.go          reconnecting daemon event listener
 ├── dashboard/
-│   ├── api.go                    Dashboard refresh read
+│   ├── refresh.go                Dashboard refresh read
 │   └── types.go                  Dashboard DTOs and update event
-└── containers/
-    ├── api.go                    reads, commands and streams
-    ├── types.go                  Containers DTOs/options/events
-    └── errors.go                 Docker error translation
+├── containers/                   separated facade/commands/reads/streams
+└── compose/                      separated facade/commands/reads/jobs/logs
 
 internal/platform/docker/         real Docker/Compose construction and adapters
 
@@ -84,6 +83,10 @@ recording handlers. They cover:
 - scheduler timing without wall-clock sleeps;
 - Docker event routing and listener reconnection;
 - logs/stats transformation and session cancellation;
+- bounded jobs, per-project conflicts, cancellation and caller disconnect survival;
+- page-broadcast job progress/completion and completion-triggered refreshes;
+- Compose allowed-root validation, project/service conversion and operation mapping;
+- Compose log transformation and job progress output;
 - dependency ownership and leak-free shutdown.
 
 There are no snapshot/cache tests because the architecture contains no Docker
@@ -94,15 +97,17 @@ resource snapshot cache.
 Integration tests verify behavior that fakes cannot establish reliably:
 
 - real Moby request/response behavior;
-- typed Dashboard and Containers data from a real daemon;
+- typed Dashboard, Containers and Compose data from a real daemon;
 - accepted commands followed by authoritative page updates;
 - normalized Docker events and affected-page refreshes;
 - details and processes delivered through `PageContainers`;
 - logs and stats stream behavior;
+- Compose up/details/logs/lifecycle/scale/down behavior;
 - use and closure of one shared Moby client;
 - cleanup of every resource created by the test.
 
-Container exec is not part of this version and has no contract or test.
+Container exec and interactive Compose exec are not part of this version and
+have no contract or test.
 
 ## Commands
 
@@ -135,7 +140,7 @@ go test -tags=integration ./...
 go test -race -tags=integration ./...
 ```
 
-The executable is a temporary manual Dashboard/Containers demo:
+The executable is a temporary manual Dashboard/Containers/Compose demo:
 
 ```sh
 # Containers page only, then watch updates for ten seconds.
@@ -152,11 +157,29 @@ go run ./cmd/ssh-docker-tui \
   -container-id=my-container \
   -container-action=restart \
   -watch=20s
+
+# List active Compose projects.
+go run ./cmd/ssh-docker-tui -page=compose -watch=0
+
+# Inspect one active Compose project.
+go run ./cmd/ssh-docker-tui \
+  -page=compose \
+  -compose-project=my-project \
+  -compose-file=/srv/compose/my-project/compose.yaml
+
+# Run a long Compose operation and print progress.
+go run ./cmd/ssh-docker-tui \
+  -page=compose \
+  -compose-project=my-project \
+  -compose-file=/srv/compose/my-project/compose.yaml \
+  -compose-action=up
 ```
 
 Supported manual actions are start, stop, restart, pause, unpause, kill,
 rename and remove. Destructive operations act only on the explicitly selected
-existing resource.
+existing resource. Compose actions are start, stop, restart, pause, unpause,
+scale, up, down, pull, build and logs. `up`, `pull`, `build` and `scale` require
+an explicit allowed `-compose-file`.
 
 ## Docker configuration
 
@@ -180,7 +203,9 @@ Every run receives a random ID and labels its resources with:
 
 The fixture does not expose its unrestricted Moby client. Domain tests use
 narrow arrangement and inspection helpers. Every created resource must use
-`fixture.Name`, apply `fixture.Labels`, and be tracked immediately.
+`fixture.Name`, apply `fixture.Labels`, and be tracked immediately. Compose
+tests register project-label fallback cleanup before starting a job, so partial
+failures remain isolated.
 
 Cleanup removes only explicitly tracked resources, in dependency order:
 

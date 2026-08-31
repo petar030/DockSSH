@@ -2,9 +2,12 @@ package dockerfixture
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -128,6 +131,78 @@ func (fixture *Fixture) Labels(extra map[string]string) map[string]string {
 // The fixture never pulls or removes this shared base image.
 func (fixture *Fixture) ContainerImage() string {
 	return fixture.config.ContainerImage
+}
+
+// CreateComposeConfig writes one isolated Compose definition inside the
+// fixture's allowed root. JSON is valid YAML and avoids unsafe string assembly.
+func (fixture *Fixture) CreateComposeConfig(suffix string, command []string) (string, string, error) {
+	projectName := fixture.Name(suffix)
+	projectDir := filepath.Join(fixture.composeRoot, projectName)
+	if err := os.MkdirAll(projectDir, 0o700); err != nil {
+		return "", "", fmt.Errorf("create Compose test directory: %w", err)
+	}
+	configPath := filepath.Join(projectDir, "compose.yaml")
+	configuration := map[string]any{
+		"name": projectName,
+		"services": map[string]any{
+			"web": map[string]any{
+				"image": fixture.config.ContainerImage, "command": append([]string(nil), command...),
+				"labels": fixture.Labels(nil),
+			},
+		},
+	}
+	value, err := json.MarshalIndent(configuration, "", "  ")
+	if err != nil {
+		return "", "", fmt.Errorf("encode Compose test config: %w", err)
+	}
+	if err := os.WriteFile(configPath, value, 0o600); err != nil {
+		return "", "", fmt.Errorf("write Compose test config: %w", err)
+	}
+	return projectName, configPath, nil
+}
+
+// TrackComposeProject registers label-scoped fallback cleanup before a Compose
+// job starts, so partial or failed jobs cannot leave test resources behind.
+func (fixture *Fixture) TrackComposeProject(projectName string) {
+	label := "com.docker.compose.project=" + projectName
+	fixture.cleanup.add(containerResource, projectName, func(ctx context.Context) error {
+		result, err := fixture.client.ContainerList(ctx, client.ContainerListOptions{
+			All: true, Filters: make(client.Filters).Add("label", label),
+		})
+		if err != nil {
+			return err
+		}
+		for _, value := range result.Items {
+			if _, err := fixture.client.ContainerRemove(ctx, value.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !errdefs.IsNotFound(err) {
+				return err
+			}
+		}
+		return nil
+	})
+	fixture.cleanup.add(networkResource, projectName, func(ctx context.Context) error {
+		result, err := fixture.client.NetworkList(ctx, client.NetworkListOptions{Filters: make(client.Filters).Add("label", label)})
+		if err != nil {
+			return err
+		}
+		for _, value := range result.Items {
+			if _, err := fixture.client.NetworkRemove(ctx, value.ID, client.NetworkRemoveOptions{}); err != nil && !errdefs.IsNotFound(err) {
+				return err
+			}
+		}
+		return nil
+	})
+	fixture.cleanup.add(volumeResource, projectName, func(ctx context.Context) error {
+		result, err := fixture.client.VolumeList(ctx, client.VolumeListOptions{Filters: make(client.Filters).Add("label", label)})
+		if err != nil {
+			return err
+		}
+		for _, value := range result.Items {
+			if _, err := fixture.client.VolumeRemove(ctx, value.Name, client.VolumeRemoveOptions{Force: true}); err != nil && !errdefs.IsNotFound(err) {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // RequireDedicatedDaemon prevents an unsafe test (for example, unrestricted

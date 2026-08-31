@@ -14,6 +14,7 @@ import (
 	"github.com/moby/moby/api/types/events"
 	"github.com/moby/moby/client"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
+	composepage "github.com/petar030/ssh-native-docker-tui/internal/backend/compose"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/dashboard"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/eventhub"
@@ -77,6 +78,8 @@ type BackendConfig struct {
 	CommandWorkers       int
 	CommandQueue         int
 	CommandTimeout       time.Duration
+	JobCapacity          int
+	ComposeRoots         []string
 }
 
 // Application retains all SDK handles while exposing the shared backend API.
@@ -121,8 +124,19 @@ func NewBackend(ctx context.Context, config BackendConfig) (*Application, error)
 		_ = dependencies.Client.Close()
 		return nil, err
 	}
+	jobs, err := backendruntime.NewJobExecutor(backendruntime.JobExecutorConfig{
+		Refreshes: refreshes, Publisher: events, Clock: clock, Capacity: config.JobCapacity,
+	})
+	if err != nil {
+		_ = commands.Close(context.Background())
+		_ = refreshes.Close(context.Background())
+		_ = events.Close()
+		_ = dependencies.Client.Close()
+		return nil, err
+	}
 	cleanup := func() {
 		_ = commands.Close(context.Background())
+		_ = jobs.Close(context.Background())
 		_ = refreshes.Close(context.Background())
 		_ = events.Close()
 		_ = dependencies.Client.Close()
@@ -154,6 +168,19 @@ func NewBackend(ctx context.Context, config BackendConfig) (*Application, error)
 		cleanup()
 		return nil, err
 	}
+	composeAPI, err := composepage.NewAPI(dependencies.ComposeAPI, commands, jobs, refreshes, config.ComposeRoots)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	if err := refreshes.RegisterPage(backend.PageCompose, composepage.RefreshKindList, composeAPI.ReadRefresh); err != nil {
+		cleanup()
+		return nil, err
+	}
+	if err := refreshes.Register(backend.PageCompose, composepage.RefreshKindDetails, composeAPI.ReadRefresh); err != nil {
+		cleanup()
+		return nil, err
+	}
 	if err := refreshes.RegisterPage(backend.PageSystem, backend.RefreshKindBackendStatus, func(ctx context.Context, _ backend.RefreshKey) (backend.EventPayload, error) {
 		result, err := dependencies.Client.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true})
 		if err != nil {
@@ -169,9 +196,9 @@ func NewBackend(ctx context.Context, config BackendConfig) (*Application, error)
 
 	eventSource := newMobyEventSource(dependencies.Client)
 	applicationBackend, err := backendruntime.New(ctx, backendruntime.Config{
-		Clock: clock, EventHub: events, Refreshes: refreshes, Commands: commands,
+		Clock: clock, EventHub: events, Refreshes: refreshes, Commands: commands, Jobs: jobs,
 		RefreshPolicies: config.RefreshPolicies, DockerEvents: eventSource,
-		OwnedDockerClient: dependencies.Client, Containers: containersAPI,
+		OwnedDockerClient: dependencies.Client, Containers: containersAPI, Compose: composeAPI,
 	})
 	if err != nil {
 		return nil, err
