@@ -22,7 +22,9 @@ internal/backend/                 production contracts and behavior
 │   ├── refresh.go                Dashboard refresh read
 │   └── types.go                  Dashboard DTOs and update event
 ├── containers/                   separated facade/commands/reads/streams
-└── compose/                      separated facade/commands/reads/jobs/logs
+├── compose/                      separated facade/commands/reads/jobs/logs
+├── images/                       separated facade/commands/reads/pull job
+└── volumes/                      separated facade/commands/reads
 
 internal/platform/docker/         real Docker/Compose construction and adapters
 
@@ -87,6 +89,8 @@ recording handlers. They cover:
 - page-broadcast job progress/completion and completion-triggered refreshes;
 - Compose allowed-root validation, project/service conversion and operation mapping;
 - Compose log transformation and job progress output;
+- image list/details/history conversion, guarded prune, and pull progress decoding;
+- volume list/details/attachment conversion, guarded prune, and in-use conflict mapping;
 - dependency ownership and leak-free shutdown.
 
 There are no snapshot/cache tests because the architecture contains no Docker
@@ -97,17 +101,24 @@ resource snapshot cache.
 Integration tests verify behavior that fakes cannot establish reliably:
 
 - real Moby request/response behavior;
-- typed Dashboard, Containers and Compose data from a real daemon;
+- typed Dashboard, Containers, Compose, Images and Volumes data from a real daemon;
 - accepted commands followed by authoritative page updates;
 - normalized Docker events and affected-page refreshes;
 - details and processes delivered through `PageContainers`;
 - logs and stats stream behavior;
 - Compose up/details/logs/lifecycle/scale/down behavior;
+- image list/details/history/tag/remove behavior without removing the shared base image;
+- volume create/details/attachments/in-use conflict/remove behavior;
+- label-filtered volume prune with a non-matching sentinel assertion;
 - use and closure of one shared Moby client;
 - cleanup of every resource created by the test.
 
 Container exec and interactive Compose exec are not part of this version and
-have no contract or test.
+have no contract or test. Image pull is fully unit-tested through the real
+Moby response contract but the standard integration suite does not depend on
+Internet/registry access. Image prune is filter-validated in unit tests and is
+not run against a shared developer daemon because an existing test image cannot
+be safely retrofitted with a unique image label.
 
 ## Commands
 
@@ -173,13 +184,26 @@ go run ./cmd/ssh-docker-tui \
   -compose-project=my-project \
   -compose-file=/srv/compose/my-project/compose.yaml \
   -compose-action=up
+
+# List local images or inspect one image's history.
+go run ./cmd/ssh-docker-tui -page=images -watch=0
+go run ./cmd/ssh-docker-tui -page=images -image-id=nginx:latest -image-action=history
+
+# Pull an image as a backend-owned job and print progress.
+go run ./cmd/ssh-docker-tui -page=images -image-action=pull -image-reference=alpine:latest
+
+# List volumes or inspect one volume's attached containers.
+go run ./cmd/ssh-docker-tui -page=volumes -watch=0
+go run ./cmd/ssh-docker-tui -page=volumes -volume-name=my-volume -volume-action=attachments
 ```
 
 Supported manual actions are start, stop, restart, pause, unpause, kill,
 rename and remove. Destructive operations act only on the explicitly selected
 existing resource. Compose actions are start, stop, restart, pause, unpause,
 scale, up, down, pull, build and logs. `up`, `pull`, `build` and `scale` require
-an explicit allowed `-compose-file`.
+an explicit allowed `-compose-file`. Image actions are details, history, tag,
+remove and pull. Volume actions are details, attachments, create and remove.
+Prune is intentionally not exposed by this temporary manual executable.
 
 ## Docker configuration
 
@@ -205,7 +229,9 @@ The fixture does not expose its unrestricted Moby client. Domain tests use
 narrow arrangement and inspection helpers. Every created resource must use
 `fixture.Name`, apply `fixture.Labels`, and be tracked immediately. Compose
 tests register project-label fallback cleanup before starting a job, so partial
-failures remain isolated.
+failures remain isolated. Image tests remove only fixture-created tags. Volume
+prune tests require a unique label and assert that a differently labeled
+sentinel remains.
 
 Cleanup removes only explicitly tracked resources, in dependency order:
 

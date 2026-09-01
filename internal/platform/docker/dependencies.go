@@ -18,7 +18,9 @@ import (
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/dashboard"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/eventhub"
+	"github.com/petar030/ssh-native-docker-tui/internal/backend/images"
 	backendruntime "github.com/petar030/ssh-native-docker-tui/internal/backend/runtime"
+	"github.com/petar030/ssh-native-docker-tui/internal/backend/volumes"
 )
 
 // Dependencies groups the SDK objects shared by backend services. Bootstrap
@@ -181,6 +183,40 @@ func NewBackend(ctx context.Context, config BackendConfig) (*Application, error)
 		cleanup()
 		return nil, err
 	}
+	imagesAPI, err := images.NewAPI(dependencies.Client, commands, jobs, refreshes)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	if err := refreshes.RegisterPage(backend.PageImages, images.RefreshKindList, imagesAPI.ReadRefresh); err != nil {
+		cleanup()
+		return nil, err
+	}
+	if err := refreshes.Register(backend.PageImages, images.RefreshKindDetails, imagesAPI.ReadRefresh); err != nil {
+		cleanup()
+		return nil, err
+	}
+	if err := refreshes.Register(backend.PageImages, images.RefreshKindHistory, imagesAPI.ReadRefresh); err != nil {
+		cleanup()
+		return nil, err
+	}
+	volumesAPI, err := volumes.NewAPI(dependencies.Client, commands, refreshes)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	if err := refreshes.RegisterPage(backend.PageVolumes, volumes.RefreshKindList, volumesAPI.ReadRefresh); err != nil {
+		cleanup()
+		return nil, err
+	}
+	if err := refreshes.Register(backend.PageVolumes, volumes.RefreshKindDetails, volumesAPI.ReadRefresh); err != nil {
+		cleanup()
+		return nil, err
+	}
+	if err := refreshes.Register(backend.PageVolumes, volumes.RefreshKindAttachments, volumesAPI.ReadRefresh); err != nil {
+		cleanup()
+		return nil, err
+	}
 	if err := refreshes.RegisterPage(backend.PageSystem, backend.RefreshKindBackendStatus, func(ctx context.Context, _ backend.RefreshKey) (backend.EventPayload, error) {
 		result, err := dependencies.Client.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true})
 		if err != nil {
@@ -199,6 +235,7 @@ func NewBackend(ctx context.Context, config BackendConfig) (*Application, error)
 		Clock: clock, EventHub: events, Refreshes: refreshes, Commands: commands, Jobs: jobs,
 		RefreshPolicies: config.RefreshPolicies, DockerEvents: eventSource,
 		OwnedDockerClient: dependencies.Client, Containers: containersAPI, Compose: composeAPI,
+		Images: imagesAPI, Volumes: volumesAPI,
 	})
 	if err != nil {
 		return nil, err

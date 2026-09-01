@@ -11,6 +11,8 @@ import (
 	composepage "github.com/petar030/ssh-native-docker-tui/internal/backend/compose"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/eventhub"
+	"github.com/petar030/ssh-native-docker-tui/internal/backend/images"
+	"github.com/petar030/ssh-native-docker-tui/internal/backend/volumes"
 )
 
 type Config struct {
@@ -25,6 +27,8 @@ type Config struct {
 	OwnedDockerClient io.Closer
 	Containers        *containers.API
 	Compose           *composepage.API
+	Images            *images.API
+	Volumes           *volumes.API
 }
 
 // Backend is the process-wide facade shared by every TUI session. It routes
@@ -38,6 +42,8 @@ type Backend struct {
 	owner      io.Closer
 	containers *containers.API
 	compose    *composepage.API
+	images     *images.API
+	volumes    *volumes.API
 
 	runCancel context.CancelFunc
 	runDone   chan error
@@ -75,6 +81,7 @@ func New(ctx context.Context, config Config) (*Backend, error) {
 	application := &Backend{
 		events: config.EventHub, refreshes: config.Refreshes, commands: config.Commands, jobs: config.Jobs,
 		scheduler: scheduler, owner: config.OwnedDockerClient, containers: config.Containers, compose: config.Compose,
+		images: config.Images, volumes: config.Volumes,
 		runDone: make(chan error, 1), closeDone: make(chan struct{}),
 	}
 	runContext, runCancel := context.WithCancel(context.Background())
@@ -118,6 +125,14 @@ func (application *Backend) Containers() *containers.API {
 
 func (application *Backend) Compose() *composepage.API {
 	return application.compose
+}
+
+func (application *Backend) Images() *images.API {
+	return application.images
+}
+
+func (application *Backend) Volumes() *volumes.API {
+	return application.volumes
 }
 
 func (application *Backend) handleDockerEvent(_ context.Context, event backend.DockerEventObserved) {

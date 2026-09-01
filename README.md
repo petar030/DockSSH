@@ -32,8 +32,8 @@ configuration, safety rules, and instructions for connecting the future
 production backend to the conformance suite.
 
 Until the Wish/Bubble Tea interface is implemented, manually exercise the real
-Dashboard/Containers/Compose APIs, command workers, job executor, refresh
-manager, and Docker event listener with:
+Dashboard, Containers, Compose, Images, and Volumes APIs, command workers, job
+executor, refresh manager, and Docker event listener with:
 
 ```sh
 go run ./cmd/ssh-docker-tui
@@ -43,6 +43,13 @@ For example, list active Compose projects with:
 
 ```sh
 go run ./cmd/ssh-docker-tui -page=compose -watch=0
+```
+
+List local images or volumes with:
+
+```sh
+go run ./cmd/ssh-docker-tui -page=images -watch=0
+go run ./cmd/ssh-docker-tui -page=volumes -watch=0
 ```
 
 The executable entry point is `./cmd/ssh-docker-tui`.

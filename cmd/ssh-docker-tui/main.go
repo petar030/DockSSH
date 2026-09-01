@@ -17,13 +17,15 @@ import (
 	composepage "github.com/petar030/ssh-native-docker-tui/internal/backend/compose"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/dashboard"
+	imagepage "github.com/petar030/ssh-native-docker-tui/internal/backend/images"
+	volumepage "github.com/petar030/ssh-native-docker-tui/internal/backend/volumes"
 	dockerplatform "github.com/petar030/ssh-native-docker-tui/internal/platform/docker"
 )
 
 func main() {
 	watch := flag.Duration("watch", 10*time.Second, "how long to print live page updates after the initial data")
 	endpoint := flag.String("docker-host", "", "optional Docker daemon endpoint; defaults to Docker environment settings")
-	page := flag.String("page", "containers", "demo page: containers or all")
+	page := flag.String("page", "containers", "demo page: containers, compose, images, volumes, or all")
 	containerID := flag.String("container-id", "", "container ID/name to inspect; defaults to the first listed container")
 	containerAction := flag.String("container-action", "", "optional command: start, stop, restart, pause, unpause, kill, rename, or remove")
 	containerName := flag.String("container-name", "", "new name for -container-action=rename")
@@ -32,6 +34,13 @@ func main() {
 	composeAction := flag.String("compose-action", "", "optional action: start, stop, restart, pause, unpause, scale, up, down, pull, build, or logs")
 	composeService := flag.String("compose-service", "", "optional Compose service selected by an action")
 	composeReplicas := flag.Int("compose-replicas", 1, "replica count for -compose-action=scale")
+	imageID := flag.String("image-id", "", "image ID/reference to inspect or mutate; defaults to the first listed image")
+	imageAction := flag.String("image-action", "", "optional action: details, history, tag, remove, or pull")
+	imageReference := flag.String("image-reference", "", "destination tag or pull reference for the selected image action")
+	imagePlatform := flag.String("image-platform", "", "optional pull platform as os/architecture[/variant]")
+	volumeName := flag.String("volume-name", "", "volume name to inspect, create, or remove; defaults to the first listed volume")
+	volumeAction := flag.String("volume-action", "", "optional action: details, attachments, create, or remove")
+	volumeDriver := flag.String("volume-driver", "", "optional driver for -volume-action=create")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -39,6 +48,8 @@ func main() {
 	if err := runSelectedDemo(
 		ctx, *endpoint, *watch, *page, *containerID, *containerAction, *containerName,
 		*composeProject, *composeFile, *composeAction, *composeService, *composeReplicas,
+		*imageID, *imageAction, *imageReference, *imagePlatform,
+		*volumeName, *volumeAction, *volumeDriver,
 	); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintln(os.Stderr, "ssh-docker-tui:", err)
 		os.Exit(1)
@@ -52,6 +63,8 @@ func runSelectedDemo(
 	page, requestedID, action, newName string,
 	composeProject, composeFile, composeAction, composeService string,
 	composeReplicas int,
+	imageID, imageAction, imageReference, imagePlatform string,
+	volumeName, volumeAction, volumeDriver string,
 ) error {
 	switch strings.ToLower(strings.TrimSpace(page)) {
 	case "containers":
@@ -60,9 +73,224 @@ func runSelectedDemo(
 		return runAllDemo(ctx, endpoint, watch, requestedID, action, newName)
 	case "compose":
 		return runComposeDemo(ctx, endpoint, watch, composeProject, composeFile, composeAction, composeService, composeReplicas)
+	case "images":
+		return runImagesDemo(ctx, endpoint, imageID, imageAction, imageReference, imagePlatform)
+	case "volumes":
+		return runVolumesDemo(ctx, endpoint, volumeName, volumeAction, volumeDriver)
 	default:
-		return fmt.Errorf("unknown -page %q (choose containers, compose, or all)", page)
+		return fmt.Errorf("unknown -page %q (choose containers, compose, images, volumes, or all)", page)
 	}
+}
+
+func runImagesDemo(ctx context.Context, endpoint, requestedID, action, reference, platform string) error {
+	application, err := dockerplatform.NewBackend(ctx, dockerplatform.BackendConfig{Endpoint: endpoint})
+	if err != nil {
+		return err
+	}
+	defer closeApplication(application)
+	listEvents, err := application.Subscribe(ctx, backend.PageImages, backend.EventFilter{Types: []backend.EventType{imagepage.EventListUpdated}})
+	if err != nil {
+		return err
+	}
+	defer listEvents.Close()
+	detailEvents, err := application.Subscribe(ctx, backend.PageImages, backend.EventFilter{
+		Types: []backend.EventType{imagepage.EventDetailsUpdated, imagepage.EventHistoryUpdated, backend.EventRefreshFailed},
+	})
+	if err != nil {
+		return err
+	}
+	defer detailEvents.Close()
+	if err := application.RequestRefresh(backend.PageImages); err != nil {
+		return err
+	}
+	event, err := waitForDemoEvent(ctx, listEvents.Events())
+	if err != nil {
+		return err
+	}
+	update := event.Payload.(imagepage.ListUpdated)
+	fmt.Printf("Images (%d):\n", len(update.Images))
+	for _, image := range update.Images {
+		name := "<untagged>"
+		if len(image.RepoTags) > 0 {
+			name = strings.Join(image.RepoTags, ",")
+		}
+		fmt.Printf("  %-20s %-45s %d bytes\n", shortID(image.ID), name, image.Size)
+	}
+	action = strings.ToLower(strings.TrimSpace(action))
+	if action == "pull" {
+		if strings.TrimSpace(reference) == "" {
+			return errors.New("pull requires -image-reference")
+		}
+		job, err := application.Images().Pull(ctx, reference, imagepage.PullOptions{Platform: platform})
+		if err != nil {
+			return err
+		}
+		for progress := range job.Progress() {
+			fmt.Printf("[%s] %-16s %d/%d %s\n", progress.Status, progress.Resource, progress.Current, progress.Total, progress.Message)
+		}
+		result, err := job.Wait(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Image pull completed: %s\n", result.JobID)
+		return nil
+	}
+	id := strings.TrimSpace(requestedID)
+	if id == "" && len(update.Images) > 0 {
+		id = update.Images[0].ID
+	}
+	if id == "" {
+		if action == "" {
+			return nil
+		}
+		return errors.New("-image-id is required when no image exists")
+	}
+	if action == "" {
+		action = "details"
+	}
+	switch action {
+	case "details":
+		err = application.Images().RequestDetails(id)
+	case "history":
+		err = application.Images().RequestHistory(id)
+	case "tag":
+		if strings.TrimSpace(reference) == "" {
+			return errors.New("tag requires -image-reference")
+		}
+		var result backend.CommandResult
+		result, err = application.Images().Tag(ctx, id, imagepage.TagOptions{Reference: reference})
+		if err == nil {
+			fmt.Printf("Image command completed: %s affected=%v\n", result.OperationID, result.Affected)
+		}
+		return err
+	case "remove":
+		var result backend.CommandResult
+		result, err = application.Images().Remove(ctx, id, imagepage.RemoveOptions{})
+		if err == nil {
+			fmt.Printf("Image command completed: %s affected=%v\n", result.OperationID, result.Affected)
+		}
+		return err
+	default:
+		return fmt.Errorf("unknown image action %q", action)
+	}
+	if err != nil {
+		return err
+	}
+	detailEvent, err := waitForDemoEvent(ctx, detailEvents.Events())
+	if err != nil {
+		return err
+	}
+	if failure, ok := detailEvent.Payload.(backend.RefreshFailed); ok {
+		return failure.Err
+	}
+	switch payload := detailEvent.Payload.(type) {
+	case imagepage.DetailsUpdated:
+		fmt.Printf("\nImage %s: %s/%s size=%d bytes tags=%s\n", shortID(payload.Image.ID), payload.Image.OS, payload.Image.Architecture, payload.Image.Size, strings.Join(payload.Image.RepoTags, ","))
+	case imagepage.HistoryUpdated:
+		fmt.Printf("\nImage history (%d):\n", len(payload.Entries))
+		for _, entry := range payload.Entries {
+			fmt.Printf("  %-20s %10d %s\n", shortID(entry.ID), entry.Size, entry.CreatedBy)
+		}
+	}
+	return nil
+}
+
+func runVolumesDemo(ctx context.Context, endpoint, requestedName, action, driver string) error {
+	application, err := dockerplatform.NewBackend(ctx, dockerplatform.BackendConfig{Endpoint: endpoint})
+	if err != nil {
+		return err
+	}
+	defer closeApplication(application)
+	listEvents, err := application.Subscribe(ctx, backend.PageVolumes, backend.EventFilter{Types: []backend.EventType{volumepage.EventListUpdated}})
+	if err != nil {
+		return err
+	}
+	defer listEvents.Close()
+	detailEvents, err := application.Subscribe(ctx, backend.PageVolumes, backend.EventFilter{
+		Types: []backend.EventType{volumepage.EventDetailsUpdated, volumepage.EventAttachmentsUpdated, backend.EventRefreshFailed},
+	})
+	if err != nil {
+		return err
+	}
+	defer detailEvents.Close()
+	if err := application.RequestRefresh(backend.PageVolumes); err != nil {
+		return err
+	}
+	event, err := waitForDemoEvent(ctx, listEvents.Events())
+	if err != nil {
+		return err
+	}
+	update := event.Payload.(volumepage.ListUpdated)
+	fmt.Printf("Volumes (%d):\n", len(update.Volumes))
+	for _, volume := range update.Volumes {
+		fmt.Printf("  %-32s driver=%-10s scope=%s\n", volume.Name, volume.Driver, volume.Scope)
+	}
+	name := strings.TrimSpace(requestedName)
+	if name == "" && len(update.Volumes) > 0 {
+		name = update.Volumes[0].Name
+	}
+	action = strings.ToLower(strings.TrimSpace(action))
+	if action == "create" {
+		if strings.TrimSpace(requestedName) == "" {
+			return errors.New("create requires -volume-name")
+		}
+		result, err := application.Volumes().Create(ctx, volumepage.CreateOptions{Name: requestedName, Driver: driver})
+		if err == nil {
+			fmt.Printf("Volume command completed: %s affected=%v\n", result.OperationID, result.Affected)
+		}
+		return err
+	}
+	if name == "" {
+		if action == "" {
+			return nil
+		}
+		return errors.New("-volume-name is required when no volume exists")
+	}
+	if action == "" {
+		action = "details"
+	}
+	switch action {
+	case "details":
+		err = application.Volumes().RequestDetails(name)
+	case "attachments":
+		err = application.Volumes().RequestAttachments(name)
+	case "remove":
+		result, removeErr := application.Volumes().Remove(ctx, name, volumepage.RemoveOptions{})
+		if removeErr == nil {
+			fmt.Printf("Volume command completed: %s affected=%v\n", result.OperationID, result.Affected)
+		}
+		return removeErr
+	default:
+		return fmt.Errorf("unknown volume action %q", action)
+	}
+	if err != nil {
+		return err
+	}
+	detailEvent, err := waitForDemoEvent(ctx, detailEvents.Events())
+	if err != nil {
+		return err
+	}
+	if failure, ok := detailEvent.Payload.(backend.RefreshFailed); ok {
+		return failure.Err
+	}
+	switch payload := detailEvent.Payload.(type) {
+	case volumepage.DetailsUpdated:
+		fmt.Printf("\nVolume %s: driver=%s scope=%s mountpoint=%s labels=%v\n", payload.Volume.Name, payload.Volume.Driver, payload.Volume.Scope, payload.Volume.Mountpoint, payload.Volume.Labels)
+	case volumepage.AttachmentsUpdated:
+		fmt.Printf("\nVolume attachments (%d):\n", len(payload.Attachments))
+		for _, attachment := range payload.Attachments {
+			fmt.Printf("  %-20s %-12s -> %s rw=%v\n", attachment.ContainerName, attachment.State, attachment.Destination, attachment.ReadWrite)
+		}
+	}
+	return nil
+}
+
+func shortID(value string) string {
+	value = strings.TrimPrefix(value, "sha256:")
+	if len(value) > 12 {
+		return value[:12]
+	}
+	return value
 }
 
 func runComposeDemo(

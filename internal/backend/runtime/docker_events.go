@@ -74,6 +74,11 @@ func PagesAffectedByDockerEvent(event backend.DockerEventObserved) []backend.Pag
 		if event.Project != "" {
 			pages = append(pages, backend.PageCompose)
 		}
+		// Container creation and destruction change the authoritative reverse
+		// view of which containers are attached to named volumes.
+		if event.Action == "create" || event.Action == "destroy" {
+			pages = append(pages, backend.PageVolumes)
+		}
 	case "image", "builder":
 		pages = append(pages, backend.PageImages)
 	case "volume":

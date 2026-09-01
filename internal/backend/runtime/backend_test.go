@@ -189,6 +189,8 @@ func TestDockerEventPageMapping(t *testing.T) {
 		want  []backend.Page
 	}{
 		{backend.DockerEventObserved{Resource: "container"}, []backend.Page{backend.PageDashboard, backend.PageContainers}},
+		{backend.DockerEventObserved{Resource: "container", Action: "create"}, []backend.Page{backend.PageDashboard, backend.PageContainers, backend.PageVolumes}},
+		{backend.DockerEventObserved{Resource: "container", Action: "destroy"}, []backend.Page{backend.PageDashboard, backend.PageContainers, backend.PageVolumes}},
 		{backend.DockerEventObserved{Resource: "container", Project: "demo"}, []backend.Page{backend.PageDashboard, backend.PageContainers, backend.PageCompose}},
 		{backend.DockerEventObserved{Resource: "image"}, []backend.Page{backend.PageDashboard, backend.PageImages}},
 		{backend.DockerEventObserved{Resource: "volume"}, []backend.Page{backend.PageDashboard, backend.PageVolumes}},

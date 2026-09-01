@@ -1,4 +1,4 @@
-TODO list for development
+ TODO list for development
 
 - [x] Setup Go project
 - [x] Setup local git environment
@@ -61,21 +61,21 @@ TODO list for development
 
 ## Slice 4: Images tab
 
-- [ ] Define image DTOs, filters, options, jobs, and API contracts
-- [ ] Test and implement the image list window
-- [ ] Test and implement image details and history windows
-- [ ] Test and implement tag, remove, and safely filtered prune actions
-- [ ] Test and implement image pull jobs and progress
-- [ ] Verify image and disk-usage refreshes after image changes
+- [x] Define image DTOs, filters, options, jobs, and API contracts
+- [x] Test and implement the image list window
+- [x] Test and implement image details and history windows
+- [x] Test and implement tag, remove, and safely filtered prune actions
+- [x] Test and implement image pull jobs and progress
+- [x] Verify image and disk-usage refreshes after image changes
 
 ## Slice 5: Volumes tab
 
-- [ ] Define volume DTOs, filters, options, and API contracts
-- [ ] Test and implement the volume list window
-- [ ] Test and implement volume details and attached-containers windows
-- [ ] Test and implement create, remove, and safely filtered prune actions
-- [ ] Test conflict handling when a volume is in use
-- [ ] Verify volume, container, and disk-usage refreshes
+- [x] Define volume DTOs, filters, options, and API contracts
+- [x] Test and implement the volume list window
+- [x] Test and implement volume details and attached-containers windows
+- [x] Test and implement create, remove, and safely filtered prune actions
+- [x] Test conflict handling when a volume is in use
+- [x] Verify volume, container, and disk-usage refreshes
 
 ## Slice 6: Networks tab
 
@@ -119,3 +119,5 @@ TODO list for development
 - [ ] Support Compose profiles
 - [ ] Support custom environment variables and `.env` file selection
 - [ ] Support an explicit Compose project directory
+- [ ] Exec into a container terminal
+- [ ] Edit docker compose using nano editor

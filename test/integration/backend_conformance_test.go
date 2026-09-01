@@ -12,6 +12,8 @@ import (
 	composepage "github.com/petar030/ssh-native-docker-tui/internal/backend/compose"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/dashboard"
+	imagepage "github.com/petar030/ssh-native-docker-tui/internal/backend/images"
+	volumepage "github.com/petar030/ssh-native-docker-tui/internal/backend/volumes"
 	dockerplatform "github.com/petar030/ssh-native-docker-tui/internal/platform/docker"
 	"github.com/petar030/ssh-native-docker-tui/test/backendtest"
 	"github.com/petar030/ssh-native-docker-tui/test/dockerfixture"
@@ -323,6 +325,193 @@ func TestComposeSliceAgainstDocker(t *testing.T) {
 	waitForComposeProject(t, ctx, listSubscription.Events(), projectName, false)
 }
 
+func TestImagesSliceAgainstDocker(t *testing.T) {
+	fixture := dockerfixture.New(t)
+	environment := fixture.Environment()
+	ctx, cancel := context.WithTimeout(context.Background(), environment.Timeout)
+	defer cancel()
+	sourceReference, err := fixture.CreateImageTag(ctx, "slice-four-source")
+	if err != nil {
+		t.Fatalf("arrange image tag: %v", err)
+	}
+	application, err := dockerplatform.NewBackend(ctx, dockerplatform.BackendConfig{Endpoint: environment.DockerEndpoint})
+	if err != nil {
+		t.Fatalf("construct production backend: %v", err)
+	}
+	t.Cleanup(func() { _ = application.Close(context.Background()) })
+
+	listSubscription, err := application.Subscribe(ctx, backend.PageImages, backend.EventFilter{Types: []backend.EventType{imagepage.EventListUpdated}})
+	if err != nil {
+		t.Fatalf("subscribe to Images list: %v", err)
+	}
+	detailsSubscription, err := application.Subscribe(ctx, backend.PageImages, backend.EventFilter{
+		Types: []backend.EventType{imagepage.EventDetailsUpdated, imagepage.EventHistoryUpdated},
+	})
+	if err != nil {
+		t.Fatalf("subscribe to Image details: %v", err)
+	}
+	dashboardSubscription, err := application.Subscribe(ctx, backend.PageDashboard, backend.EventFilter{Types: []backend.EventType{dashboard.EventSummaryUpdated}})
+	if err != nil {
+		t.Fatalf("subscribe to Dashboard: %v", err)
+	}
+
+	if err := application.RequestRefresh(backend.PageImages); err != nil {
+		t.Fatalf("refresh Images: %v", err)
+	}
+	initial := waitForImageTag(t, ctx, listSubscription.Events(), sourceReference, true)
+	image := findImageByTag(initial.Images, sourceReference)
+	if image.ID == "" {
+		t.Fatalf("source image not found: %#v", initial)
+	}
+	eventReference, err := fixture.CreateImageTag(ctx, "slice-four-event")
+	if err != nil {
+		t.Fatalf("create event image tag: %v", err)
+	}
+	for {
+		event := receiveIntegrationEvent(t, ctx, listSubscription.Events())
+		update, ok := event.Payload.(imagepage.ListUpdated)
+		if ok && event.Reason == backend.RefreshDockerEvent && findImageByTag(update.Images, eventReference).ID != "" {
+			break
+		}
+	}
+	if err := application.Images().RequestDetails(image.ID); err != nil {
+		t.Fatalf("request image details: %v", err)
+	}
+	detailsEvent := waitForEventType(t, ctx, detailsSubscription.Events(), imagepage.EventDetailsUpdated)
+	details := detailsEvent.Payload.(imagepage.DetailsUpdated).Image
+	if details.ID != image.ID || details.OS == "" || details.Architecture == "" {
+		t.Fatalf("image details = %#v", details)
+	}
+	if err := application.Images().RequestHistory(image.ID); err != nil {
+		t.Fatalf("request image history: %v", err)
+	}
+	historyEvent := waitForEventType(t, ctx, detailsSubscription.Events(), imagepage.EventHistoryUpdated)
+	history := historyEvent.Payload.(imagepage.HistoryUpdated)
+	if history.ImageID != image.ID || len(history.Entries) == 0 {
+		t.Fatalf("image history = %#v", history)
+	}
+
+	targetReference := fixture.Name("slice-four-copy") + ":test"
+	fixture.TrackImage(targetReference)
+	result, err := application.Images().Tag(ctx, image.ID, imagepage.TagOptions{Reference: targetReference})
+	if err != nil || result.OperationID != "image.tag" {
+		t.Fatalf("tag image: result=%#v err=%v", result, err)
+	}
+	waitForImageTag(t, ctx, listSubscription.Events(), targetReference, true)
+	waitForEventType(t, ctx, dashboardSubscription.Events(), dashboard.EventSummaryUpdated)
+
+	result, err = application.Images().Remove(ctx, targetReference, imagepage.RemoveOptions{})
+	if err != nil || result.OperationID != "image.remove" {
+		t.Fatalf("remove image tag: result=%#v err=%v", result, err)
+	}
+	waitForImageTag(t, ctx, listSubscription.Events(), targetReference, false)
+}
+
+func TestVolumesSliceAgainstDocker(t *testing.T) {
+	fixture := dockerfixture.New(t)
+	environment := fixture.Environment()
+	ctx, cancel := context.WithTimeout(context.Background(), environment.Timeout)
+	defer cancel()
+	application, err := dockerplatform.NewBackend(ctx, dockerplatform.BackendConfig{Endpoint: environment.DockerEndpoint})
+	if err != nil {
+		t.Fatalf("construct production backend: %v", err)
+	}
+	t.Cleanup(func() { _ = application.Close(context.Background()) })
+
+	listSubscription, err := application.Subscribe(ctx, backend.PageVolumes, backend.EventFilter{Types: []backend.EventType{volumepage.EventListUpdated}})
+	if err != nil {
+		t.Fatalf("subscribe to Volumes list: %v", err)
+	}
+	detailsSubscription, err := application.Subscribe(ctx, backend.PageVolumes, backend.EventFilter{
+		Types: []backend.EventType{volumepage.EventDetailsUpdated, volumepage.EventAttachmentsUpdated},
+	})
+	if err != nil {
+		t.Fatalf("subscribe to Volume details: %v", err)
+	}
+	dashboardSubscription, err := application.Subscribe(ctx, backend.PageDashboard, backend.EventFilter{Types: []backend.EventType{dashboard.EventSummaryUpdated}})
+	if err != nil {
+		t.Fatalf("subscribe to Dashboard: %v", err)
+	}
+	eventVolume, err := fixture.CreateVolume(ctx, "slice-five-event")
+	if err != nil {
+		t.Fatalf("create event volume: %v", err)
+	}
+	for {
+		event := receiveIntegrationEvent(t, ctx, listSubscription.Events())
+		update, ok := event.Payload.(volumepage.ListUpdated)
+		if ok && event.Reason == backend.RefreshDockerEvent && findVolume(update.Volumes, eventVolume).Name != "" {
+			break
+		}
+	}
+	waitForEventType(t, ctx, dashboardSubscription.Events(), dashboard.EventSummaryUpdated)
+
+	volumeName := fixture.Name("slice-five")
+	fixture.TrackVolume(volumeName)
+	result, err := application.Volumes().Create(ctx, volumepage.CreateOptions{Name: volumeName, Labels: fixture.Labels(nil)})
+	if err != nil || result.OperationID != "volume.create" {
+		t.Fatalf("create volume: result=%#v err=%v", result, err)
+	}
+	waitForVolume(t, ctx, listSubscription.Events(), volumeName, true)
+	waitForEventType(t, ctx, dashboardSubscription.Events(), dashboard.EventSummaryUpdated)
+
+	if err := application.Volumes().RequestDetails(volumeName); err != nil {
+		t.Fatalf("request volume details: %v", err)
+	}
+	detailsEvent := waitForEventType(t, ctx, detailsSubscription.Events(), volumepage.EventDetailsUpdated)
+	details := detailsEvent.Payload.(volumepage.DetailsUpdated).Volume
+	if details.Name != volumeName || details.Driver == "" || details.Scope == "" {
+		t.Fatalf("volume details = %#v", details)
+	}
+
+	containerID, err := fixture.CreateContainerWithVolume(ctx, "slice-five-attached", []string{"sh", "-c", "sleep 30"}, volumeName, "/data")
+	if err != nil {
+		t.Fatalf("create attached container: %v", err)
+	}
+	if err := application.Volumes().RequestAttachments(volumeName); err != nil {
+		t.Fatalf("request volume attachments: %v", err)
+	}
+	attachmentsEvent := waitForEventType(t, ctx, detailsSubscription.Events(), volumepage.EventAttachmentsUpdated)
+	attachments := attachmentsEvent.Payload.(volumepage.AttachmentsUpdated)
+	if len(attachments.Attachments) != 1 || attachments.Attachments[0].ContainerID != containerID || attachments.Attachments[0].Destination != "/data" {
+		t.Fatalf("volume attachments = %#v", attachments)
+	}
+	if _, err := application.Volumes().Remove(ctx, volumeName, volumepage.RemoveOptions{}); !backend.HasErrorCode(err, backend.ErrorConflict) {
+		t.Fatalf("remove in-use volume error = %v", err)
+	}
+	if _, err := application.Containers().Remove(ctx, containerID, containers.RemoveOptions{Force: true}); err != nil {
+		t.Fatalf("remove attached container: %v", err)
+	}
+	result, err = application.Volumes().Remove(ctx, volumeName, volumepage.RemoveOptions{})
+	if err != nil || result.OperationID != "volume.remove" {
+		t.Fatalf("remove volume: result=%#v err=%v", result, err)
+	}
+	waitForVolume(t, ctx, listSubscription.Events(), volumeName, false)
+
+	pruneTarget := fixture.Name("slice-five-prune")
+	sentinel := fixture.Name("slice-five-sentinel")
+	fixture.TrackVolume(pruneTarget)
+	fixture.TrackVolume(sentinel)
+	pruneLabel := "ssh-docker-tui.integration-prune"
+	if _, err := application.Volumes().Create(ctx, volumepage.CreateOptions{
+		Name: pruneTarget, Labels: fixture.Labels(map[string]string{pruneLabel: "target"}),
+	}); err != nil {
+		t.Fatalf("create prune target: %v", err)
+	}
+	if _, err := application.Volumes().Create(ctx, volumepage.CreateOptions{
+		Name: sentinel, Labels: fixture.Labels(map[string]string{pruneLabel: "sentinel"}),
+	}); err != nil {
+		t.Fatalf("create prune sentinel: %v", err)
+	}
+	waitForVolume(t, ctx, listSubscription.Events(), sentinel, true)
+	if _, err := application.Volumes().Prune(ctx, volumepage.PruneOptions{All: true, Labels: map[string]string{pruneLabel: "target"}}); err != nil {
+		t.Fatalf("prune labeled volume: %v", err)
+	}
+	update := waitForVolume(t, ctx, listSubscription.Events(), pruneTarget, false)
+	if findVolume(update.Volumes, sentinel).Name != sentinel {
+		t.Fatalf("filtered prune removed sentinel: %#v", update)
+	}
+}
+
 func assertComposeCommand(t *testing.T, result backend.CommandResult, err error) {
 	t.Helper()
 	if err != nil {
@@ -353,6 +542,58 @@ func waitForComposeProject(
 		}
 		if found == present {
 			return update
+		}
+	}
+}
+
+func waitForImageTag(t *testing.T, ctx context.Context, events <-chan backend.EventEnvelope, tag string, present bool) imagepage.ListUpdated {
+	t.Helper()
+	for {
+		event := receiveIntegrationEvent(t, ctx, events)
+		update, ok := event.Payload.(imagepage.ListUpdated)
+		if ok && (findImageByTag(update.Images, tag).ID != "") == present {
+			return update
+		}
+	}
+}
+
+func findImageByTag(values []imagepage.Summary, tag string) imagepage.Summary {
+	for _, value := range values {
+		for _, candidate := range value.RepoTags {
+			if candidate == tag {
+				return value
+			}
+		}
+	}
+	return imagepage.Summary{}
+}
+
+func waitForVolume(t *testing.T, ctx context.Context, events <-chan backend.EventEnvelope, name string, present bool) volumepage.ListUpdated {
+	t.Helper()
+	for {
+		event := receiveIntegrationEvent(t, ctx, events)
+		update, ok := event.Payload.(volumepage.ListUpdated)
+		if ok && (findVolume(update.Volumes, name).Name != "") == present {
+			return update
+		}
+	}
+}
+
+func findVolume(values []volumepage.Volume, name string) volumepage.Volume {
+	for _, value := range values {
+		if value.Name == name {
+			return value
+		}
+	}
+	return volumepage.Volume{}
+}
+
+func waitForRefreshReason(t *testing.T, ctx context.Context, events <-chan backend.EventEnvelope, reason backend.RefreshReason) backend.EventEnvelope {
+	t.Helper()
+	for {
+		event := receiveIntegrationEvent(t, ctx, events)
+		if event.Reason == reason {
+			return event
 		}
 	}
 }

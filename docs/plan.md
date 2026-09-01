@@ -117,9 +117,9 @@ type Backend interface {
 }
 ```
 
-Domain accessors such as `Containers()` and `Compose()` expose their page API. Dashboard is
-read-only and needs no separate public accessor because its data arrives from a
-page refresh subscription.
+Domain accessors `Containers()`, `Compose()`, `Images()`, and `Volumes()` expose
+their page APIs. Dashboard is read-only and needs no separate public accessor
+because its data arrives from a page refresh subscription.
 
 `RequestRefresh` confirms that backend work was accepted. It does not wait for
 Docker. The typed success or `RefreshFailed` event arrives through that page's
@@ -320,8 +320,8 @@ which backend mechanism handles each one.
 | Dashboard | Base summary refresh only | None | None | None | `Dashboard.RefreshHandler.ReadRefresh` | Implemented, read-only |
 | Containers | Base list; `RequestDetails`; `RequestProcesses` | `Start`, `Stop`, `Restart`, `Pause`, `Unpause`, `Kill`, `Rename`, `Remove` | None | `Logs`, `Stats` | `Containers.API.ReadRefresh` | Implemented |
 | Compose | Base project list; `RequestDetails` | `Start`, `Stop`, `Restart`, `Pause`, `Unpause`, `Scale` | `Up`, `Down`, `Pull`, `Build` | `Logs` | `Compose.API.ReadRefresh` | Implemented; interactive exec deferred |
-| Images | Base list and targeted details (exact methods defined in Slice 4) | Tag, remove, safely scoped prune | Pull | None currently planned | `Images.API.ReadRefresh` | Planned in Slice 4 |
-| Volumes | Base list, targeted details, attached-container view | Create, remove, safely scoped prune | None currently planned | None currently planned | `Volumes.API.ReadRefresh` | Planned in Slice 5 |
+| Images | Base list; `RequestDetails`; `RequestHistory` | `Tag`, `Remove`, guarded filtered `Prune` | `Pull` | None | `Images.API.ReadRefresh` | Implemented |
+| Volumes | Base list; `RequestDetails`; `RequestAttachments` | `Create`, `Remove`, guarded label-filtered `Prune` | None | None | `Volumes.API.ReadRefresh` | Implemented |
 | Networks | Base list, targeted details, connected-container view | Create, remove, connect, disconnect, safely scoped prune | None currently planned | None currently planned | `Networks.API.ReadRefresh` | Planned in Slice 6 |
 | Events | Subscription/filter changes only; Docker listener publishes raw observations | None | None | The page subscription itself is the live event feed | Future authoritative handler only if needed | Planned in Slice 7; Docker listener remains runtime-owned |
 | System | Docker/system and disk-usage refreshes | Deliberately scoped prune operations | None currently planned | None currently planned | `System.API.ReadRefresh` | Planned in Slice 8 |
@@ -359,6 +359,23 @@ explicit `ProjectSpec`; every config file must resolve beneath a configured
 `ComposeRoots` directory. Short lifecycle operations use `CommandExecutor`,
 logs are session-owned, and long operations use `JobExecutor`.
 
+**Images.** `Backend.RequestRefresh(PageImages)` publishes the complete local
+image list. `RequestDetails` and `RequestHistory` submit targeted refresh keys.
+Tag, remove, and prune are short commands; prune rejects its zero value and
+requires an explicit reviewed filter. `Pull` is a backend-owned job whose
+conflict key uses the normalized image reference. Docker JSON pull messages
+become job progress without exposing registry credentials. Image list filters
+are session-local because the shared page refresh intentionally publishes one
+complete list.
+
+**Volumes.** `Backend.RequestRefresh(PageVolumes)` publishes the complete
+volume list. `RequestDetails` and `RequestAttachments` are targeted refreshes.
+Attachments are read authoritatively by listing all containers with Docker's
+exact volume filter; no reverse index is stored. Create, remove, and prune are
+short commands. Volume prune always requires at least one label filter; `All`
+only makes named volumes matching that label eligible. Volume list filters are
+session-local.
+
 The current implemented packages are therefore:
 
 ```text
@@ -386,6 +403,25 @@ internal/backend/compose/
 ├── paths.go
 ├── refresh.go
 ├── streams.go
+├── types.go
+└── api_test.go
+
+internal/backend/images/
+├── api.go
+├── commands.go
+├── docker.go
+├── errors.go
+├── jobs.go
+├── refresh.go
+├── types.go
+└── api_test.go
+
+internal/backend/volumes/
+├── api.go
+├── commands.go
+├── docker.go
+├── errors.go
+├── refresh.go
 ├── types.go
 └── api_test.go
 ```
@@ -420,16 +456,17 @@ bidirectional stream rather than being forced into a short command.
 
 ### Long-running jobs
 
-Compose up/down/pull/build use one backend-owned `JobExecutor`, separate from
-the short-command queue. It permits four active jobs by default and rejects new
-work when full. There is no waiting job queue. One conflict key prevents two
-long jobs from mutating the same Compose project concurrently.
+Compose up/down/pull/build and image pull use one backend-owned `JobExecutor`,
+separate from the short-command queue. It permits four active jobs by default
+and rejects new work when full. There is no waiting job queue. Conflict keys
+prevent two long jobs from mutating the same Compose project or pulling the
+same normalized image reference concurrently.
 
 Accepted work uses backend lifetime. The initiating TUI receives a `Job` handle
 with best-effort progress, cancellation and reliable `Wait`. Progress and
-terminal `JobFinished` events are also broadcast on `PageCompose`, so other
+terminal `JobFinished` events are broadcast on the job's owning page, so other
 subscribed sessions observe the same operation. Completion requests all
-declared Refresh Manager keys. Image pull can reuse this executor in Slice 4.
+declared Refresh Manager keys.
 
 ## Docker event ingestion
 
@@ -441,6 +478,13 @@ For each normalized event it independently:
 1. publishes the raw observation to `PageEvents`;
 2. adds it to bounded Event Hub history;
 3. requests Dashboard and affected resource-page refreshes.
+
+Container `create` and `destroy` observations also request a Volumes refresh,
+because those actions can change the authoritative attached-containers view.
+Container start/stop events do not do so because they do not change declared
+mounts. The event requests the base Volumes list because the backend stores no
+session selection. A TUI currently displaying attachments re-requests
+`RequestAttachments(selectedVolume)` after that page update.
 
 `PageEvents` subscribers are never required for Dashboard or another page to
 refresh. Docker events are hints to re-read authoritative state, not final UI
@@ -456,11 +500,22 @@ state.
 | Recent normalized Docker events | Event Hub history | Bounded process lifetime |
 | Pending refresh keys | Refresh Manager | Until handled/shutdown |
 | Accepted short commands | Command Executor | Until completion/timeout/shutdown |
-| Active jobs and per-project conflict keys | Job Executor | Until completion/cancellation/shutdown |
+| Active jobs and resource conflict keys | Job Executor | Until completion/cancellation/shutdown |
 | Logs and stats | Initiating TUI session | View/session lifetime |
 
 Operational queue and subscription state is necessary coordination state; it is
 not a duplicate Docker resource cache.
+
+## Destructive resource-operation safety
+
+Page APIs never turn a zero-value prune request into a daemon-wide prune.
+Images prune requires an explicit supported filter and rejects
+`dangling=false`; Volumes prune requires at least one label filter. The API
+constructs Moby filters only after validation. Integration tests use unique
+fixture identities and verify a non-matching sentinel volume survives filtered
+prune. Standard integration does not image-prune or pull from the Internet;
+those boundaries remain unit-tested unless a fixture-controlled registry or
+dedicated daemon is configured.
 
 ## Error model
 

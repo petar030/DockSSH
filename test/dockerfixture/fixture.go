@@ -13,6 +13,7 @@ import (
 
 	"github.com/containerd/errdefs"
 	containertypes "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
 	"github.com/petar030/ssh-native-docker-tui/test/backendtest"
 )
@@ -133,6 +134,17 @@ func (fixture *Fixture) ContainerImage() string {
 	return fixture.config.ContainerImage
 }
 
+// CreateImageTag creates and tracks a unique tag pointing at the configured
+// shared test image. Cleanup removes only the new tag, never the shared image.
+func (fixture *Fixture) CreateImageTag(ctx context.Context, suffix string) (string, error) {
+	reference := fixture.Name(suffix) + ":test"
+	if _, err := fixture.client.ImageTag(ctx, client.ImageTagOptions{Source: fixture.config.ContainerImage, Target: reference}); err != nil {
+		return "", fmt.Errorf("tag test image %q: %w", reference, err)
+	}
+	fixture.TrackImage(reference)
+	return reference, nil
+}
+
 // CreateComposeConfig writes one isolated Compose definition inside the
 // fixture's allowed root. JSON is valid YAML and avoids unsafe string assembly.
 func (fixture *Fixture) CreateComposeConfig(suffix string, command []string) (string, string, error) {
@@ -243,6 +255,32 @@ func (fixture *Fixture) CreateContainer(ctx context.Context, suffix string, comm
 	})
 	if err != nil {
 		return "", fmt.Errorf("create test container %q from %q: %w", name, fixture.config.ContainerImage, err)
+	}
+	fixture.TrackContainer(result.ID)
+	return result.ID, nil
+}
+
+// CreateContainerWithVolume creates a tracked container mounting one exact
+// named volume. The volume itself remains owned by its separate cleanup entry.
+func (fixture *Fixture) CreateContainerWithVolume(
+	ctx context.Context,
+	suffix string,
+	command []string,
+	volumeName string,
+	destination string,
+) (string, error) {
+	name := fixture.Name(suffix)
+	result, err := fixture.client.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name: name,
+		Config: &containertypes.Config{
+			Image: fixture.config.ContainerImage, Cmd: append([]string(nil), command...), Labels: fixture.Labels(nil),
+		},
+		HostConfig: &containertypes.HostConfig{Mounts: []mount.Mount{{
+			Type: mount.TypeVolume, Source: volumeName, Target: destination,
+		}}},
+	})
+	if err != nil {
+		return "", fmt.Errorf("create test container %q with volume %q: %w", name, volumeName, err)
 	}
 	fixture.TrackContainer(result.ID)
 	return result.ID, nil
