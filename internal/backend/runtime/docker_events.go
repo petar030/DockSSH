@@ -77,7 +77,7 @@ func PagesAffectedByDockerEvent(event backend.DockerEventObserved) []backend.Pag
 		// Container creation and destruction change the authoritative reverse
 		// view of which containers are attached to named volumes.
 		if event.Action == "create" || event.Action == "destroy" {
-			pages = append(pages, backend.PageVolumes)
+			pages = append(pages, backend.PageVolumes, backend.PageNetworks)
 		}
 	case "image", "builder":
 		pages = append(pages, backend.PageImages)
@@ -85,6 +85,9 @@ func PagesAffectedByDockerEvent(event backend.DockerEventObserved) []backend.Pag
 		pages = append(pages, backend.PageVolumes)
 	case "network":
 		pages = append(pages, backend.PageNetworks)
+		if event.Action == "connect" || event.Action == "disconnect" {
+			pages = append(pages, backend.PageContainers)
+		}
 	case "daemon":
 		pages = append(pages, backend.PageSystem)
 	}

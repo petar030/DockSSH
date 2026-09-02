@@ -117,9 +117,10 @@ type Backend interface {
 }
 ```
 
-Domain accessors `Containers()`, `Compose()`, `Images()`, and `Volumes()` expose
-their page APIs. Dashboard is read-only and needs no separate public accessor
-because its data arrives from a page refresh subscription.
+Domain accessors `Containers()`, `Compose()`, `Images()`, `Volumes()`,
+`Networks()`, and `System()` expose their page APIs. Dashboard and Events need
+no separate public accessor: their callable operations are the common page
+refresh and subscription methods.
 
 `RequestRefresh` confirms that backend work was accepted. It does not wait for
 Docker. The typed success or `RefreshFailed` event arrives through that page's
@@ -163,6 +164,13 @@ Each bus provides page-local ordering, typed filtering and non-blocking
 broadcast. A slow subscriber receives `SubscriberOverflow` and requests an
 authoritative recovery refresh. The Event Hub never calls Docker, executes a
 command or starts a refresh.
+
+All subscriptions may filter by event type and full refresh key. Events-page
+subscriptions may additionally filter raw `DockerEventObserved` values by
+resource type, resource ID, action and Compose project. Non-empty filter
+dimensions are combined with AND; values inside one dimension are alternatives.
+These Docker-specific dimensions do not hide non-Docker payloads such as the
+complete recent-window update when its event type is requested.
 
 The Events bus also retains a bounded history of normalized Docker events. This
 is event history, not cached Docker resource state.
@@ -322,9 +330,9 @@ which backend mechanism handles each one.
 | Compose | Base project list; `RequestDetails` | `Start`, `Stop`, `Restart`, `Pause`, `Unpause`, `Scale` | `Up`, `Down`, `Pull`, `Build` | `Logs` | `Compose.API.ReadRefresh` | Implemented; interactive exec deferred |
 | Images | Base list; `RequestDetails`; `RequestHistory` | `Tag`, `Remove`, guarded filtered `Prune` | `Pull` | None | `Images.API.ReadRefresh` | Implemented |
 | Volumes | Base list; `RequestDetails`; `RequestAttachments` | `Create`, `Remove`, guarded label-filtered `Prune` | None | None | `Volumes.API.ReadRefresh` | Implemented |
-| Networks | Base list, targeted details, connected-container view | Create, remove, connect, disconnect, safely scoped prune | None currently planned | None currently planned | `Networks.API.ReadRefresh` | Planned in Slice 6 |
-| Events | Subscription/filter changes only; Docker listener publishes raw observations | None | None | The page subscription itself is the live event feed | Future authoritative handler only if needed | Planned in Slice 7; Docker listener remains runtime-owned |
-| System | Docker/system and disk-usage refreshes | Deliberately scoped prune operations | None currently planned | None currently planned | `System.API.ReadRefresh` | Planned in Slice 8 |
+| Networks | Base list; `RequestDetails`; `RequestConnections` | `Create`, `Remove`, guarded filtered `Prune`, `Connect`, `Disconnect` | None | None | `Networks.API.ReadRefresh` | Implemented |
+| Events | Base bounded recent window; raw live observations selected through `Subscribe` filters | None | None | The page subscription is the live event feed | `Events.RefreshHandler.ReadRefresh` | Implemented, read-only |
+| System | Base version/info; `RequestDiskUsage` | `PruneContainers`, `PruneImages`, `PruneVolumes`, `PruneNetworks`, guarded `PruneSystem` | None | None | `System.API.ReadRefresh` | Implemented |
 
 **Refreshes** never return Docker data directly to the caller. The Refresh
 Manager performs the read in backend-owned work and publishes a typed update to
@@ -333,10 +341,6 @@ their worker finishes, then request affected refreshes. **Jobs** return a
 `Job` handle immediately after backend acceptance; progress and completion are
 published to the page Event Hub, and `Job.Wait` provides the terminal result.
 **Streams** are direct, session-owned readers and do not use either executor.
-
-For unimplemented pages this inventory intentionally describes capabilities,
-not prematurely frozen Go method names. Each slice defines its exact exported
-DTO/options/API contracts test-first in `types.go` and `api_test.go`.
 
 ### Implemented page details
 
@@ -375,6 +379,29 @@ exact volume filter; no reverse index is stored. Create, remove, and prune are
 short commands. Volume prune always requires at least one label filter; `All`
 only makes named volumes matching that label eligible. Volume list filters are
 session-local.
+
+**Networks.** `Backend.RequestRefresh(PageNetworks)` publishes the complete
+network list. `RequestDetails` publishes inspect/IPAM data and
+`RequestConnections` publishes the connected-container view with assigned MAC,
+IPv4 and IPv6 addresses. Create, remove, label/age-filtered prune, connect and
+disconnect are short commands. Endpoint commands refresh the selected network,
+the Containers list and the selected container details. Network list filters
+remain session-local.
+
+**Events.** The one runtime-owned Docker listener publishes every normalized
+`DockerEventObserved` directly to `PageEvents` and stores it in bounded history.
+`Backend.RequestRefresh(PageEvents)` publishes a newest-first `RecentUpdated`
+window from that same history; the update itself is not inserted back into
+history. Live subscriptions support resource, resource-ID, action and project
+filters. Pause and clear are future Bubble Tea model actions only: they never
+pause the process listener or erase shared history.
+
+**System.** `Backend.RequestRefresh(PageSystem)` publishes Docker version and
+host information; `RequestDiskUsage` publishes verbose aggregate and per-item
+container, image, volume and build-cache usage. The four resource-specific
+prunes require explicit narrowing filters and return a typed `PruneResult` in
+addition to command metadata. Broad `PruneSystem` requires both bootstrap
+`AllowSystemPrune` opt-in and the exact `SystemPruneConfirmation` token.
 
 The current implemented packages are therefore:
 
@@ -417,6 +444,29 @@ internal/backend/images/
 └── api_test.go
 
 internal/backend/volumes/
+├── api.go
+├── commands.go
+├── docker.go
+├── errors.go
+├── refresh.go
+├── types.go
+└── api_test.go
+
+internal/backend/networks/
+├── api.go
+├── commands.go
+├── docker.go
+├── errors.go
+├── refresh.go
+├── types.go
+└── api_test.go
+
+internal/backend/events/
+├── refresh.go
+├── types.go
+└── refresh_test.go
+
+internal/backend/system/
 ├── api.go
 ├── commands.go
 ├── docker.go
@@ -479,12 +529,14 @@ For each normalized event it independently:
 2. adds it to bounded Event Hub history;
 3. requests Dashboard and affected resource-page refreshes.
 
-Container `create` and `destroy` observations also request a Volumes refresh,
-because those actions can change the authoritative attached-containers view.
+Container `create` and `destroy` observations also request Volumes and Networks
+refreshes because those actions can change their authoritative reverse views.
 Container start/stop events do not do so because they do not change declared
-mounts. The event requests the base Volumes list because the backend stores no
-session selection. A TUI currently displaying attachments re-requests
-`RequestAttachments(selectedVolume)` after that page update.
+mounts or endpoints. Network `connect` and `disconnect` observations also
+request Containers because they change container inspect data. Event-triggered
+work requests base page refreshes because the backend stores no session
+selection. A TUI displaying targeted attachments/connections/details may
+re-request its selected target after the base update.
 
 `PageEvents` subscribers are never required for Dashboard or another page to
 refresh. Docker events are hints to re-read authoritative state, not final UI
@@ -510,12 +562,16 @@ not a duplicate Docker resource cache.
 
 Page APIs never turn a zero-value prune request into a daemon-wide prune.
 Images prune requires an explicit supported filter and rejects
-`dangling=false`; Volumes prune requires at least one label filter. The API
-constructs Moby filters only after validation. Integration tests use unique
-fixture identities and verify a non-matching sentinel volume survives filtered
-prune. Standard integration does not image-prune or pull from the Internet;
-those boundaries remain unit-tested unless a fixture-controlled registry or
-dedicated daemon is configured.
+`dangling=false`; Volumes prune requires at least one label filter; Networks
+and stopped-container prune require at least one label or age filter. The APIs
+construct Moby filters only after validation. Integration tests use unique
+fixture identities and verify non-matching container, volume and network
+sentinels survive filtered prune. Broad system prune is unavailable unless
+bootstrap sets `AllowSystemPrune`, and still requires an exact confirmation
+token. Its real-Docker test calls `RequireDedicatedDaemon` and therefore skips
+on a normal developer daemon. Standard integration does not image-prune or pull
+from the Internet; those boundaries remain unit-tested unless a
+fixture-controlled registry or dedicated daemon is configured.
 
 ## Error model
 

@@ -18,8 +18,11 @@ import (
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/dashboard"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/eventhub"
+	eventpage "github.com/petar030/ssh-native-docker-tui/internal/backend/events"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/images"
+	"github.com/petar030/ssh-native-docker-tui/internal/backend/networks"
 	backendruntime "github.com/petar030/ssh-native-docker-tui/internal/backend/runtime"
+	systempage "github.com/petar030/ssh-native-docker-tui/internal/backend/system"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/volumes"
 )
 
@@ -82,6 +85,7 @@ type BackendConfig struct {
 	CommandTimeout       time.Duration
 	JobCapacity          int
 	ComposeRoots         []string
+	AllowSystemPrune     bool
 }
 
 // Application retains all SDK handles while exposing the shared backend API.
@@ -217,15 +221,42 @@ func NewBackend(ctx context.Context, config BackendConfig) (*Application, error)
 		cleanup()
 		return nil, err
 	}
-	if err := refreshes.RegisterPage(backend.PageSystem, backend.RefreshKindBackendStatus, func(ctx context.Context, _ backend.RefreshKey) (backend.EventPayload, error) {
-		result, err := dependencies.Client.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true})
-		if err != nil {
-			return nil, err
-		}
-		return backend.BackendStatusUpdated{
-			APIVersion: result.APIVersion, OSType: result.OSType, Experimental: result.Experimental,
-		}, nil
-	}); err != nil {
+	networksAPI, err := networks.NewAPI(dependencies.Client, commands, refreshes)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	if err := refreshes.RegisterPage(backend.PageNetworks, networks.RefreshKindList, networksAPI.ReadRefresh); err != nil {
+		cleanup()
+		return nil, err
+	}
+	if err := refreshes.Register(backend.PageNetworks, networks.RefreshKindDetails, networksAPI.ReadRefresh); err != nil {
+		cleanup()
+		return nil, err
+	}
+	if err := refreshes.Register(backend.PageNetworks, networks.RefreshKindConnections, networksAPI.ReadRefresh); err != nil {
+		cleanup()
+		return nil, err
+	}
+	eventsRefresh, err := eventpage.NewRefreshHandler(events, 0)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	if err := refreshes.RegisterPage(backend.PageEvents, eventpage.RefreshKindRecent, eventsRefresh.ReadRefresh); err != nil {
+		cleanup()
+		return nil, err
+	}
+	systemAPI, err := systempage.NewAPI(dependencies.Client, commands, refreshes, config.AllowSystemPrune)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	if err := refreshes.RegisterPage(backend.PageSystem, systempage.RefreshKindInfo, systemAPI.ReadRefresh); err != nil {
+		cleanup()
+		return nil, err
+	}
+	if err := refreshes.Register(backend.PageSystem, systempage.RefreshKindDiskUsage, systemAPI.ReadRefresh); err != nil {
 		cleanup()
 		return nil, err
 	}
@@ -235,7 +266,7 @@ func NewBackend(ctx context.Context, config BackendConfig) (*Application, error)
 		Clock: clock, EventHub: events, Refreshes: refreshes, Commands: commands, Jobs: jobs,
 		RefreshPolicies: config.RefreshPolicies, DockerEvents: eventSource,
 		OwnedDockerClient: dependencies.Client, Containers: containersAPI, Compose: composeAPI,
-		Images: imagesAPI, Volumes: volumesAPI,
+		Images: imagesAPI, Volumes: volumesAPI, Networks: networksAPI, System: systemAPI,
 	})
 	if err != nil {
 		return nil, err

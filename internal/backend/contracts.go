@@ -165,10 +165,15 @@ type SubscriberOverflow struct {
 func (SubscriberOverflow) EventType() EventType { return EventSubscriberOverflow }
 
 // EventFilter selects events for one independent subscriber. Empty fields do
-// not restrict their corresponding dimension.
+// not restrict their corresponding dimension. Docker-specific dimensions are
+// ANDed only for DockerEventObserved payloads; values within one slice are ORed.
 type EventFilter struct {
-	Types []EventType
-	Keys  []RefreshKey
+	Types             []EventType
+	Keys              []RefreshKey
+	DockerResources   []string
+	DockerResourceIDs []string
+	DockerActions     []string
+	DockerProjects    []string
 }
 
 // Subscription owns a bounded event channel until Close or context

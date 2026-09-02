@@ -17,7 +17,10 @@ import (
 	composepage "github.com/petar030/ssh-native-docker-tui/internal/backend/compose"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/dashboard"
+	eventpage "github.com/petar030/ssh-native-docker-tui/internal/backend/events"
 	imagepage "github.com/petar030/ssh-native-docker-tui/internal/backend/images"
+	networkpage "github.com/petar030/ssh-native-docker-tui/internal/backend/networks"
+	systempage "github.com/petar030/ssh-native-docker-tui/internal/backend/system"
 	volumepage "github.com/petar030/ssh-native-docker-tui/internal/backend/volumes"
 	dockerplatform "github.com/petar030/ssh-native-docker-tui/internal/platform/docker"
 )
@@ -25,7 +28,7 @@ import (
 func main() {
 	watch := flag.Duration("watch", 10*time.Second, "how long to print live page updates after the initial data")
 	endpoint := flag.String("docker-host", "", "optional Docker daemon endpoint; defaults to Docker environment settings")
-	page := flag.String("page", "containers", "demo page: containers, compose, images, volumes, or all")
+	page := flag.String("page", "containers", "demo page: containers, compose, images, volumes, networks, events, system, or all")
 	containerID := flag.String("container-id", "", "container ID/name to inspect; defaults to the first listed container")
 	containerAction := flag.String("container-action", "", "optional command: start, stop, restart, pause, unpause, kill, rename, or remove")
 	containerName := flag.String("container-name", "", "new name for -container-action=rename")
@@ -41,6 +44,13 @@ func main() {
 	volumeName := flag.String("volume-name", "", "volume name to inspect, create, or remove; defaults to the first listed volume")
 	volumeAction := flag.String("volume-action", "", "optional action: details, attachments, create, or remove")
 	volumeDriver := flag.String("volume-driver", "", "optional driver for -volume-action=create")
+	networkID := flag.String("network-id", "", "network ID/name to inspect or mutate; defaults to the first listed network")
+	networkName := flag.String("network-name", "", "name required by -network-action=create")
+	networkAction := flag.String("network-action", "", "optional action: details, connections, create, remove, connect, or disconnect")
+	networkContainerID := flag.String("network-container-id", "", "container ID/name required by network connect/disconnect")
+	eventResource := flag.String("event-resource", "", "optional comma-separated Docker event resource filter")
+	eventAction := flag.String("event-action", "", "optional comma-separated Docker event action filter")
+	eventProject := flag.String("event-project", "", "optional comma-separated Compose project event filter")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -50,6 +60,8 @@ func main() {
 		*composeProject, *composeFile, *composeAction, *composeService, *composeReplicas,
 		*imageID, *imageAction, *imageReference, *imagePlatform,
 		*volumeName, *volumeAction, *volumeDriver,
+		*networkID, *networkName, *networkAction, *networkContainerID,
+		*eventResource, *eventAction, *eventProject,
 	); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintln(os.Stderr, "ssh-docker-tui:", err)
 		os.Exit(1)
@@ -65,6 +77,8 @@ func runSelectedDemo(
 	composeReplicas int,
 	imageID, imageAction, imageReference, imagePlatform string,
 	volumeName, volumeAction, volumeDriver string,
+	networkID, networkName, networkAction, networkContainerID string,
+	eventResource, eventAction, eventProject string,
 ) error {
 	switch strings.ToLower(strings.TrimSpace(page)) {
 	case "containers":
@@ -77,9 +91,231 @@ func runSelectedDemo(
 		return runImagesDemo(ctx, endpoint, imageID, imageAction, imageReference, imagePlatform)
 	case "volumes":
 		return runVolumesDemo(ctx, endpoint, volumeName, volumeAction, volumeDriver)
+	case "networks":
+		return runNetworksDemo(ctx, endpoint, networkID, networkName, networkAction, networkContainerID)
+	case "events":
+		return runEventsDemo(ctx, endpoint, watch, eventResource, eventAction, eventProject)
+	case "system":
+		return runSystemDemo(ctx, endpoint)
 	default:
-		return fmt.Errorf("unknown -page %q (choose containers, compose, images, volumes, or all)", page)
+		return fmt.Errorf("unknown -page %q (choose containers, compose, images, volumes, networks, events, system, or all)", page)
 	}
+}
+
+func runNetworksDemo(ctx context.Context, endpoint, requestedID, requestedName, action, containerID string) error {
+	application, err := dockerplatform.NewBackend(ctx, dockerplatform.BackendConfig{Endpoint: endpoint})
+	if err != nil {
+		return err
+	}
+	defer closeApplication(application)
+	listEvents, err := application.Subscribe(ctx, backend.PageNetworks, backend.EventFilter{Types: []backend.EventType{networkpage.EventListUpdated}})
+	if err != nil {
+		return err
+	}
+	defer listEvents.Close()
+	detailEvents, err := application.Subscribe(ctx, backend.PageNetworks, backend.EventFilter{
+		Types: []backend.EventType{networkpage.EventDetailsUpdated, networkpage.EventConnectionsUpdated, backend.EventRefreshFailed},
+	})
+	if err != nil {
+		return err
+	}
+	defer detailEvents.Close()
+	if err := application.RequestRefresh(backend.PageNetworks); err != nil {
+		return err
+	}
+	event, err := waitForDemoEvent(ctx, listEvents.Events())
+	if err != nil {
+		return err
+	}
+	update := event.Payload.(networkpage.ListUpdated)
+	fmt.Printf("Networks (%d):\n", len(update.Networks))
+	for _, value := range update.Networks {
+		fmt.Printf("  %-20s %-24s driver=%-10s scope=%s internal=%v\n", shortID(value.ID), value.Name, value.Driver, value.Scope, value.Internal)
+	}
+
+	action = strings.ToLower(strings.TrimSpace(action))
+	if action == "create" {
+		name := strings.TrimSpace(requestedName)
+		if name == "" {
+			return errors.New("create requires -network-name")
+		}
+		result, err := application.Networks().Create(ctx, networkpage.CreateOptions{Name: name, Driver: "bridge"})
+		if err == nil {
+			fmt.Printf("Network command completed: %s affected=%v\n", result.OperationID, result.Affected)
+		}
+		return err
+	}
+	id := strings.TrimSpace(requestedID)
+	if id == "" && len(update.Networks) > 0 {
+		id = update.Networks[0].ID
+	}
+	if id == "" {
+		if action == "" {
+			return nil
+		}
+		return errors.New("-network-id is required when no network exists")
+	}
+	if action == "" {
+		action = "details"
+	}
+	switch action {
+	case "details":
+		err = application.Networks().RequestDetails(id)
+	case "connections":
+		err = application.Networks().RequestConnections(id)
+	case "remove":
+		result, commandErr := application.Networks().Remove(ctx, id, networkpage.RemoveOptions{})
+		if commandErr == nil {
+			fmt.Printf("Network command completed: %s affected=%v\n", result.OperationID, result.Affected)
+		}
+		return commandErr
+	case "connect":
+		if strings.TrimSpace(containerID) == "" {
+			return errors.New("connect requires -network-container-id")
+		}
+		result, commandErr := application.Networks().Connect(ctx, id, networkpage.ConnectOptions{ContainerID: containerID})
+		if commandErr == nil {
+			fmt.Printf("Network command completed: %s affected=%v\n", result.OperationID, result.Affected)
+		}
+		return commandErr
+	case "disconnect":
+		if strings.TrimSpace(containerID) == "" {
+			return errors.New("disconnect requires -network-container-id")
+		}
+		result, commandErr := application.Networks().Disconnect(ctx, id, networkpage.DisconnectOptions{ContainerID: containerID})
+		if commandErr == nil {
+			fmt.Printf("Network command completed: %s affected=%v\n", result.OperationID, result.Affected)
+		}
+		return commandErr
+	default:
+		return fmt.Errorf("unknown network action %q", action)
+	}
+	if err != nil {
+		return err
+	}
+	detailEvent, err := waitForDemoEvent(ctx, detailEvents.Events())
+	if err != nil {
+		return err
+	}
+	if failure, ok := detailEvent.Payload.(backend.RefreshFailed); ok {
+		return failure.Err
+	}
+	switch payload := detailEvent.Payload.(type) {
+	case networkpage.DetailsUpdated:
+		value := payload.Network
+		fmt.Printf("\nNetwork %s (%s): driver=%s scope=%s IPv4=%v IPv6=%v\n", value.Name, value.ID, value.Driver, value.Scope, value.EnableIPv4, value.EnableIPv6)
+		for _, ipam := range value.IPAM {
+			fmt.Printf("  subnet=%s range=%s gateway=%s\n", ipam.Subnet, ipam.IPRange, ipam.Gateway)
+		}
+	case networkpage.ConnectionsUpdated:
+		fmt.Printf("\nNetwork connections (%d):\n", len(payload.Connections))
+		for _, value := range payload.Connections {
+			fmt.Printf("  %-20s %-12s IPv4=%-20s IPv6=%s\n", value.ContainerName, shortID(value.ContainerID), value.IPv4Address, value.IPv6Address)
+		}
+	}
+	return nil
+}
+
+func runEventsDemo(ctx context.Context, endpoint string, watch time.Duration, resources, actions, projects string) error {
+	application, err := dockerplatform.NewBackend(ctx, dockerplatform.BackendConfig{Endpoint: endpoint})
+	if err != nil {
+		return err
+	}
+	defer closeApplication(application)
+	recentEvents, err := application.Subscribe(ctx, backend.PageEvents, backend.EventFilter{Types: []backend.EventType{eventpage.EventRecentUpdated}})
+	if err != nil {
+		return err
+	}
+	defer recentEvents.Close()
+	liveEvents, err := application.Subscribe(ctx, backend.PageEvents, backend.EventFilter{
+		Types: []backend.EventType{backend.EventDockerObserved}, DockerResources: cleanCLIValues(resources),
+		DockerActions: cleanCLIValues(actions), DockerProjects: cleanCLIValues(projects),
+	})
+	if err != nil {
+		return err
+	}
+	defer liveEvents.Close()
+	if err := application.RequestRefresh(backend.PageEvents); err != nil {
+		return err
+	}
+	event, err := waitForDemoEvent(ctx, recentEvents.Events())
+	if err != nil {
+		return err
+	}
+	window := event.Payload.(eventpage.RecentUpdated)
+	fmt.Printf("Recent Docker events (%d, newest first):\n", len(window.Events))
+	for _, value := range window.Events {
+		fmt.Printf("  %s %-10s %-12s %s\n", value.ReceivedAt.Format(time.TimeOnly), value.Resource, value.Action, value.ResourceID)
+	}
+	if watch <= 0 {
+		return nil
+	}
+	fmt.Printf("\nWatching matching Docker events for %s...\n", watch)
+	timer := time.NewTimer(watch)
+	defer timer.Stop()
+	for {
+		select {
+		case event, open := <-liveEvents.Events():
+			if !open {
+				return nil
+			}
+			if observed, ok := event.Payload.(backend.DockerEventObserved); ok {
+				fmt.Printf("  %s %-10s %-12s %s project=%s\n", event.Time.Format(time.TimeOnly), observed.Resource, observed.Action, observed.ResourceID, observed.Project)
+			}
+		case <-timer.C:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func runSystemDemo(ctx context.Context, endpoint string) error {
+	application, err := dockerplatform.NewBackend(ctx, dockerplatform.BackendConfig{Endpoint: endpoint})
+	if err != nil {
+		return err
+	}
+	defer closeApplication(application)
+	events, err := application.Subscribe(ctx, backend.PageSystem, backend.EventFilter{
+		Types: []backend.EventType{systempage.EventInfoUpdated, systempage.EventDiskUsageUpdated, backend.EventRefreshFailed},
+	})
+	if err != nil {
+		return err
+	}
+	defer events.Close()
+	if err := application.RequestRefresh(backend.PageSystem); err != nil {
+		return err
+	}
+	event, err := waitForDemoEvent(ctx, events.Events())
+	if err != nil {
+		return err
+	}
+	if failure, ok := event.Payload.(backend.RefreshFailed); ok {
+		return failure.Err
+	}
+	info := event.Payload.(systempage.InfoUpdated)
+	fmt.Printf("Docker %s (%s, API %s–%s)\n", info.Engine.Version, info.Engine.Platform, info.Engine.MinAPIVersion, info.Engine.APIVersion)
+	fmt.Printf("Host %s: %s %s, kernel %s, %s, CPUs=%d memory=%s\n", info.Host.Name, info.Host.OperatingSystem, info.Host.OSVersion, info.Host.KernelVersion, info.Host.Architecture, info.Host.CPUs, formatBytes(info.Host.MemoryBytes))
+	fmt.Printf("Storage=%s logging=%s cgroup=%s/%s runtime=%s\n", info.Host.StorageDriver, info.Host.LoggingDriver, info.Host.CgroupDriver, info.Host.CgroupVersion, info.Host.DefaultRuntime)
+	if err := application.System().RequestDiskUsage(); err != nil {
+		return err
+	}
+	event, err = waitForDemoEvent(ctx, events.Events())
+	if err != nil {
+		return err
+	}
+	if failure, ok := event.Payload.(backend.RefreshFailed); ok {
+		return failure.Err
+	}
+	disk := event.Payload.(systempage.DiskUsageUpdated)
+	fmt.Printf("Disk: containers %s (%d), images %s (%d), volumes %s (%d), build cache %s (%d)\n",
+		formatBytes(disk.Containers.TotalBytes), disk.Containers.Count,
+		formatBytes(disk.Images.TotalBytes), disk.Images.Count,
+		formatBytes(disk.Volumes.TotalBytes), disk.Volumes.Count,
+		formatBytes(disk.BuildCache.TotalBytes), disk.BuildCache.Count)
+	fmt.Printf("Detailed items: containers=%d images=%d volumes=%d build-cache=%d\n",
+		len(disk.ContainerItems), len(disk.ImageItems), len(disk.VolumeItems), len(disk.BuildCacheItems))
+	return nil
 }
 
 func runImagesDemo(ctx context.Context, endpoint, requestedID, action, reference, platform string) error {

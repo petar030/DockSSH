@@ -24,7 +24,10 @@ internal/backend/                 production contracts and behavior
 ├── containers/                   separated facade/commands/reads/streams
 ├── compose/                      separated facade/commands/reads/jobs/logs
 ├── images/                       separated facade/commands/reads/pull job
-└── volumes/                      separated facade/commands/reads
+├── volumes/                      separated facade/commands/reads
+├── networks/                     separated facade/commands/reads
+├── events/                       bounded-history refresh DTO/handler
+└── system/                       separated facade/prune commands/reads
 
 internal/platform/docker/         real Docker/Compose construction and adapters
 
@@ -91,6 +94,9 @@ recording handlers. They cover:
 - Compose log transformation and job progress output;
 - image list/details/history conversion, guarded prune, and pull progress decoding;
 - volume list/details/attachment conversion, guarded prune, and in-use conflict mapping;
+- network list/details/connections, IPAM mapping, address validation, guarded prune, and endpoint conflict mapping;
+- Docker event resource/ID/action/project filtering, bounded recent-window mapping, and slow-observer isolation;
+- System version/info and verbose disk-usage conversion, guarded resource prune reports, and broad-prune opt-in/confirmation;
 - dependency ownership and leak-free shutdown.
 
 There are no snapshot/cache tests because the architecture contains no Docker
@@ -101,7 +107,7 @@ resource snapshot cache.
 Integration tests verify behavior that fakes cannot establish reliably:
 
 - real Moby request/response behavior;
-- typed Dashboard, Containers, Compose, Images and Volumes data from a real daemon;
+- typed Dashboard, Containers, Compose, Images, Volumes, Networks, Events and System data from a real daemon;
 - accepted commands followed by authoritative page updates;
 - normalized Docker events and affected-page refreshes;
 - details and processes delivered through `PageContainers`;
@@ -110,6 +116,12 @@ Integration tests verify behavior that fakes cannot establish reliably:
 - image list/details/history/tag/remove behavior without removing the shared base image;
 - volume create/details/attachments/in-use conflict/remove behavior;
 - label-filtered volume prune with a non-matching sentinel assertion;
+- network create/details/connect/assigned-address/disconnect/in-use conflict/remove behavior;
+- label-filtered network prune with a non-matching sentinel assertion;
+- live resource/ID/action-filtered Docker events and the complete recent Events window;
+- Docker version/info and verbose detailed disk usage;
+- label-filtered container, volume and network System-prune APIs with non-matching sentinels;
+- broad system prune only when `BACKEND_TEST_DEDICATED_DAEMON=true`;
 - use and closure of one shared Moby client;
 - cleanup of every resource created by the test.
 
@@ -151,7 +163,7 @@ go test -tags=integration ./...
 go test -race -tags=integration ./...
 ```
 
-The executable is a temporary manual Dashboard/Containers/Compose demo:
+The executable is a temporary manual backend page demo:
 
 ```sh
 # Containers page only, then watch updates for ten seconds.
@@ -195,6 +207,16 @@ go run ./cmd/ssh-docker-tui -page=images -image-action=pull -image-reference=alp
 # List volumes or inspect one volume's attached containers.
 go run ./cmd/ssh-docker-tui -page=volumes -watch=0
 go run ./cmd/ssh-docker-tui -page=volumes -volume-name=my-volume -volume-action=attachments
+
+# List networks, inspect IPAM, or show connected containers and addresses.
+go run ./cmd/ssh-docker-tui -page=networks -watch=0
+go run ./cmd/ssh-docker-tui -page=networks -network-id=my-network -network-action=connections
+
+# Show bounded event history, then watch matching live observations.
+go run ./cmd/ssh-docker-tui -page=events -event-resource=container -event-action=start,stop -watch=20s
+
+# Show Docker/host information and detailed disk usage (read-only).
+go run ./cmd/ssh-docker-tui -page=system -watch=0
 ```
 
 Supported manual actions are start, stop, restart, pause, unpause, kill,
@@ -203,7 +225,10 @@ existing resource. Compose actions are start, stop, restart, pause, unpause,
 scale, up, down, pull, build and logs. `up`, `pull`, `build` and `scale` require
 an explicit allowed `-compose-file`. Image actions are details, history, tag,
 remove and pull. Volume actions are details, attachments, create and remove.
-Prune is intentionally not exposed by this temporary manual executable.
+Network actions are details, connections, create, remove, connect and
+disconnect; every mutation requires an explicit target. Events and System
+modes are read-only. Prune is intentionally not exposed by this temporary
+manual executable.
 
 ## Docker configuration
 
@@ -229,9 +254,9 @@ The fixture does not expose its unrestricted Moby client. Domain tests use
 narrow arrangement and inspection helpers. Every created resource must use
 `fixture.Name`, apply `fixture.Labels`, and be tracked immediately. Compose
 tests register project-label fallback cleanup before starting a job, so partial
-failures remain isolated. Image tests remove only fixture-created tags. Volume
-prune tests require a unique label and assert that a differently labeled
-sentinel remains.
+failures remain isolated. Image tests remove only fixture-created tags.
+Container, volume and network prune tests require a unique label and assert
+that a differently labeled sentinel remains.
 
 Cleanup removes only explicitly tracked resources, in dependency order:
 

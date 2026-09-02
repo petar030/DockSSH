@@ -12,7 +12,10 @@ import (
 	composepage "github.com/petar030/ssh-native-docker-tui/internal/backend/compose"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/dashboard"
+	eventpage "github.com/petar030/ssh-native-docker-tui/internal/backend/events"
 	imagepage "github.com/petar030/ssh-native-docker-tui/internal/backend/images"
+	networkpage "github.com/petar030/ssh-native-docker-tui/internal/backend/networks"
+	systempage "github.com/petar030/ssh-native-docker-tui/internal/backend/system"
 	volumepage "github.com/petar030/ssh-native-docker-tui/internal/backend/volumes"
 	dockerplatform "github.com/petar030/ssh-native-docker-tui/internal/platform/docker"
 	"github.com/petar030/ssh-native-docker-tui/test/backendtest"
@@ -512,6 +515,295 @@ func TestVolumesSliceAgainstDocker(t *testing.T) {
 	}
 }
 
+func TestNetworksSliceAgainstDocker(t *testing.T) {
+	fixture := dockerfixture.New(t)
+	environment := fixture.Environment()
+	ctx, cancel := context.WithTimeout(context.Background(), environment.Timeout)
+	defer cancel()
+	application, err := dockerplatform.NewBackend(ctx, dockerplatform.BackendConfig{Endpoint: environment.DockerEndpoint})
+	if err != nil {
+		t.Fatalf("construct production backend: %v", err)
+	}
+	t.Cleanup(func() { _ = application.Close(context.Background()) })
+
+	listSubscription, err := application.Subscribe(ctx, backend.PageNetworks, backend.EventFilter{Types: []backend.EventType{networkpage.EventListUpdated}})
+	if err != nil {
+		t.Fatalf("subscribe to Networks list: %v", err)
+	}
+	detailsSubscription, err := application.Subscribe(ctx, backend.PageNetworks, backend.EventFilter{
+		Types: []backend.EventType{networkpage.EventDetailsUpdated, networkpage.EventConnectionsUpdated},
+	})
+	if err != nil {
+		t.Fatalf("subscribe to Network details: %v", err)
+	}
+	dashboardSubscription, err := application.Subscribe(ctx, backend.PageDashboard, backend.EventFilter{Types: []backend.EventType{dashboard.EventSummaryUpdated}})
+	if err != nil {
+		t.Fatalf("subscribe to Dashboard: %v", err)
+	}
+
+	networkName := fixture.Name("slice-six")
+	fixture.TrackNetwork(networkName)
+	result, err := application.Networks().Create(ctx, networkpage.CreateOptions{
+		Name: networkName, Driver: "bridge", Labels: fixture.Labels(nil),
+		IPAM: []networkpage.CreateIPAMConfig{{Subnet: "172.30.240.0/24", Gateway: "172.30.240.1"}},
+	})
+	if err != nil || result.OperationID != "network.create" {
+		t.Fatalf("create network: result=%#v err=%v", result, err)
+	}
+	created := waitForNetwork(t, ctx, listSubscription.Events(), networkName, true)
+	networkID := findNetwork(created.Networks, networkName).ID
+	if networkID == "" {
+		t.Fatalf("created network missing ID: %#v", created)
+	}
+	waitForEventType(t, ctx, dashboardSubscription.Events(), dashboard.EventSummaryUpdated)
+
+	if err := application.Networks().RequestDetails(networkID); err != nil {
+		t.Fatalf("request network details: %v", err)
+	}
+	detailsEvent := waitForEventType(t, ctx, detailsSubscription.Events(), networkpage.EventDetailsUpdated)
+	details := detailsEvent.Payload.(networkpage.DetailsUpdated).Network
+	if details.ID != networkID || details.Driver != "bridge" || len(details.IPAM) != 1 || details.IPAM[0].Subnet != "172.30.240.0/24" {
+		t.Fatalf("network details = %#v", details)
+	}
+
+	containerID, err := fixture.CreateContainer(ctx, "slice-six-attached", []string{"sh", "-c", "sleep 30"})
+	if err != nil {
+		t.Fatalf("create network test container: %v", err)
+	}
+	if _, err := application.Containers().Start(ctx, containerID); err != nil {
+		t.Fatalf("start network test container: %v", err)
+	}
+	if _, err := application.Networks().Connect(ctx, networkID, networkpage.ConnectOptions{
+		ContainerID: containerID, IPv4Address: "172.30.240.8", Aliases: []string{"slice-six-alias"},
+	}); err != nil {
+		t.Fatalf("connect container: %v", err)
+	}
+	if err := application.Networks().RequestConnections(networkID); err != nil {
+		t.Fatalf("request network connections: %v", err)
+	}
+	connectionsEvent := waitForEventType(t, ctx, detailsSubscription.Events(), networkpage.EventConnectionsUpdated)
+	connections := connectionsEvent.Payload.(networkpage.ConnectionsUpdated)
+	connection := findNetworkConnection(connections.Connections, containerID)
+	if connection.ContainerID != containerID || connection.IPv4Address != "172.30.240.8/24" || connection.EndpointID == "" {
+		t.Fatalf("network connection = %#v", connection)
+	}
+	if _, err := application.Networks().Remove(ctx, networkID, networkpage.RemoveOptions{}); !backend.HasErrorCode(err, backend.ErrorConflict) {
+		t.Fatalf("remove in-use network error = %v", err)
+	}
+	if _, err := application.Networks().Disconnect(ctx, networkID, networkpage.DisconnectOptions{ContainerID: containerID}); err != nil {
+		t.Fatalf("disconnect container: %v", err)
+	}
+	if _, err := application.Networks().Remove(ctx, networkID, networkpage.RemoveOptions{}); err != nil {
+		t.Fatalf("remove network: %v", err)
+	}
+	waitForNetwork(t, ctx, listSubscription.Events(), networkName, false)
+
+	pruneLabel := "ssh-docker-tui.integration-network-prune"
+	pruneTarget := fixture.Name("slice-six-prune")
+	sentinel := fixture.Name("slice-six-sentinel")
+	fixture.TrackNetwork(pruneTarget)
+	fixture.TrackNetwork(sentinel)
+	if _, err := application.Networks().Create(ctx, networkpage.CreateOptions{
+		Name: pruneTarget, Labels: fixture.Labels(map[string]string{pruneLabel: "target"}),
+	}); err != nil {
+		t.Fatalf("create network prune target: %v", err)
+	}
+	if _, err := application.Networks().Create(ctx, networkpage.CreateOptions{
+		Name: sentinel, Labels: fixture.Labels(map[string]string{pruneLabel: "sentinel"}),
+	}); err != nil {
+		t.Fatalf("create network prune sentinel: %v", err)
+	}
+	waitForNetwork(t, ctx, listSubscription.Events(), sentinel, true)
+	if _, err := application.Networks().Prune(ctx, networkpage.PruneOptions{Labels: map[string]string{pruneLabel: "target"}}); err != nil {
+		t.Fatalf("prune labeled network: %v", err)
+	}
+	update := waitForNetwork(t, ctx, listSubscription.Events(), pruneTarget, false)
+	if findNetwork(update.Networks, sentinel).Name != sentinel {
+		t.Fatalf("filtered network prune removed sentinel: %#v", update)
+	}
+}
+
+func TestEventsSliceAgainstDocker(t *testing.T) {
+	fixture := dockerfixture.New(t)
+	environment := fixture.Environment()
+	ctx, cancel := context.WithTimeout(context.Background(), environment.Timeout)
+	defer cancel()
+	application, err := dockerplatform.NewBackend(ctx, dockerplatform.BackendConfig{Endpoint: environment.DockerEndpoint})
+	if err != nil {
+		t.Fatalf("construct production backend: %v", err)
+	}
+	t.Cleanup(func() { _ = application.Close(context.Background()) })
+
+	targetName := fixture.Name("slice-seven-target")
+	live, err := application.Subscribe(ctx, backend.PageEvents, backend.EventFilter{
+		Types: []backend.EventType{backend.EventDockerObserved}, DockerResources: []string{"volume"},
+		DockerResourceIDs: []string{targetName}, DockerActions: []string{"create"},
+	})
+	if err != nil {
+		t.Fatalf("subscribe to filtered live Events: %v", err)
+	}
+	recent, err := application.Subscribe(ctx, backend.PageEvents, backend.EventFilter{Types: []backend.EventType{eventpage.EventRecentUpdated}})
+	if err != nil {
+		t.Fatalf("subscribe to recent Events: %v", err)
+	}
+	if _, err := fixture.CreateVolume(ctx, "slice-seven-other"); err != nil {
+		t.Fatalf("create non-matching event volume: %v", err)
+	}
+	createdName, err := fixture.CreateVolume(ctx, "slice-seven-target")
+	if err != nil {
+		t.Fatalf("create matching event volume: %v", err)
+	}
+	observed := waitForDockerEvent(t, ctx, live.Events(), "volume", createdName, "create")
+	if observed.ResourceID != targetName || observed.OccurredAt.IsZero() {
+		t.Fatalf("filtered live observation = %#v", observed)
+	}
+
+	if err := application.RequestRefresh(backend.PageEvents); err != nil {
+		t.Fatalf("request recent Events: %v", err)
+	}
+	recentEvent := waitForEventType(t, ctx, recent.Events(), eventpage.EventRecentUpdated)
+	window := recentEvent.Payload.(eventpage.RecentUpdated)
+	found := false
+	for _, value := range window.Events {
+		found = found || (value.Resource == "volume" && value.ResourceID == targetName && value.Action == "create")
+	}
+	if !found {
+		t.Fatalf("recent Events window does not contain matching event: %#v", window)
+	}
+}
+
+func TestSystemSliceAgainstDocker(t *testing.T) {
+	fixture := dockerfixture.New(t)
+	environment := fixture.Environment()
+	ctx, cancel := context.WithTimeout(context.Background(), environment.Timeout)
+	defer cancel()
+	application, err := dockerplatform.NewBackend(ctx, dockerplatform.BackendConfig{Endpoint: environment.DockerEndpoint})
+	if err != nil {
+		t.Fatalf("construct production backend: %v", err)
+	}
+	t.Cleanup(func() { _ = application.Close(context.Background()) })
+
+	systemSubscription, err := application.Subscribe(ctx, backend.PageSystem, backend.EventFilter{
+		Types: []backend.EventType{systempage.EventInfoUpdated, systempage.EventDiskUsageUpdated},
+	})
+	if err != nil {
+		t.Fatalf("subscribe to System: %v", err)
+	}
+	if err := application.RequestRefresh(backend.PageSystem); err != nil {
+		t.Fatalf("request System info: %v", err)
+	}
+	infoEvent := waitForEventType(t, ctx, systemSubscription.Events(), systempage.EventInfoUpdated)
+	info := infoEvent.Payload.(systempage.InfoUpdated)
+	if info.Engine.Version == "" || info.Engine.APIVersion == "" || info.Host.Name == "" || info.Host.OperatingSystem == "" {
+		t.Fatalf("System info = %#v", info)
+	}
+	if err := application.System().RequestDiskUsage(); err != nil {
+		t.Fatalf("request System disk usage: %v", err)
+	}
+	diskEvent := waitForEventType(t, ctx, systemSubscription.Events(), systempage.EventDiskUsageUpdated)
+	disk := diskEvent.Payload.(systempage.DiskUsageUpdated)
+	if disk.Images.Count < 0 || disk.Containers.Count < 0 || disk.Volumes.Count < 0 || disk.BuildCache.Count < 0 {
+		t.Fatalf("System disk usage = %#v", disk)
+	}
+
+	containerSubscription, err := application.Subscribe(ctx, backend.PageContainers, backend.EventFilter{Types: []backend.EventType{containers.EventListUpdated}})
+	if err != nil {
+		t.Fatalf("subscribe to Containers: %v", err)
+	}
+	volumeSubscription, err := application.Subscribe(ctx, backend.PageVolumes, backend.EventFilter{Types: []backend.EventType{volumepage.EventListUpdated}})
+	if err != nil {
+		t.Fatalf("subscribe to Volumes: %v", err)
+	}
+	networkSubscription, err := application.Subscribe(ctx, backend.PageNetworks, backend.EventFilter{Types: []backend.EventType{networkpage.EventListUpdated}})
+	if err != nil {
+		t.Fatalf("subscribe to Networks: %v", err)
+	}
+	dashboardSubscription, err := application.Subscribe(ctx, backend.PageDashboard, backend.EventFilter{Types: []backend.EventType{dashboard.EventSummaryUpdated}})
+	if err != nil {
+		t.Fatalf("subscribe to Dashboard: %v", err)
+	}
+
+	pruneLabel := "ssh-docker-tui.integration-system-prune"
+	containerTarget, err := fixture.CreateContainerWithLabels(ctx, "slice-eight-container-target", []string{"true"}, map[string]string{pruneLabel: "container-target"})
+	if err != nil {
+		t.Fatalf("create container prune target: %v", err)
+	}
+	containerSentinel, err := fixture.CreateContainerWithLabels(ctx, "slice-eight-container-sentinel", []string{"true"}, map[string]string{pruneLabel: "container-sentinel"})
+	if err != nil {
+		t.Fatalf("create container prune sentinel: %v", err)
+	}
+	containerResult, err := application.System().PruneContainers(ctx, systempage.ContainerPruneOptions{Labels: map[string]string{pruneLabel: "container-target"}})
+	if err != nil || containerResult.Command.OperationID != "system.prune.containers" || !containsString(containerResult.Report.ContainersDeleted, containerTarget) {
+		t.Fatalf("prune containers: result=%#v err=%v", containerResult, err)
+	}
+	containerUpdate := waitForContainerPresence(t, ctx, containerSubscription.Events(), containerTarget, false)
+	if findContainer(containerUpdate.Containers, containerSentinel).ID != containerSentinel {
+		t.Fatalf("container prune removed sentinel: %#v", containerUpdate)
+	}
+
+	volumeTarget := fixture.Name("slice-eight-volume-target")
+	volumeSentinel := fixture.Name("slice-eight-volume-sentinel")
+	fixture.TrackVolume(volumeTarget)
+	fixture.TrackVolume(volumeSentinel)
+	if _, err := application.Volumes().Create(ctx, volumepage.CreateOptions{Name: volumeTarget, Labels: fixture.Labels(map[string]string{pruneLabel: "volume-target"})}); err != nil {
+		t.Fatalf("create volume prune target: %v", err)
+	}
+	if _, err := application.Volumes().Create(ctx, volumepage.CreateOptions{Name: volumeSentinel, Labels: fixture.Labels(map[string]string{pruneLabel: "volume-sentinel"})}); err != nil {
+		t.Fatalf("create volume prune sentinel: %v", err)
+	}
+	waitForVolume(t, ctx, volumeSubscription.Events(), volumeSentinel, true)
+	volumeResult, err := application.System().PruneVolumes(ctx, systempage.VolumePruneOptions{All: true, Labels: map[string]string{pruneLabel: "volume-target"}})
+	if err != nil || volumeResult.Command.OperationID != "system.prune.volumes" || !containsString(volumeResult.Report.VolumesDeleted, volumeTarget) {
+		t.Fatalf("prune volumes: result=%#v err=%v", volumeResult, err)
+	}
+	volumeUpdate := waitForVolume(t, ctx, volumeSubscription.Events(), volumeTarget, false)
+	if findVolume(volumeUpdate.Volumes, volumeSentinel).Name != volumeSentinel {
+		t.Fatalf("volume prune removed sentinel: %#v", volumeUpdate)
+	}
+
+	networkTarget := fixture.Name("slice-eight-network-target")
+	networkSentinel := fixture.Name("slice-eight-network-sentinel")
+	fixture.TrackNetwork(networkTarget)
+	fixture.TrackNetwork(networkSentinel)
+	if _, err := application.Networks().Create(ctx, networkpage.CreateOptions{Name: networkTarget, Labels: fixture.Labels(map[string]string{pruneLabel: "network-target"})}); err != nil {
+		t.Fatalf("create network prune target: %v", err)
+	}
+	if _, err := application.Networks().Create(ctx, networkpage.CreateOptions{Name: networkSentinel, Labels: fixture.Labels(map[string]string{pruneLabel: "network-sentinel"})}); err != nil {
+		t.Fatalf("create network prune sentinel: %v", err)
+	}
+	waitForNetwork(t, ctx, networkSubscription.Events(), networkSentinel, true)
+	networkResult, err := application.System().PruneNetworks(ctx, systempage.NetworkPruneOptions{Labels: map[string]string{pruneLabel: "network-target"}})
+	if err != nil || networkResult.Command.OperationID != "system.prune.networks" || !containsString(networkResult.Report.NetworksDeleted, networkTarget) {
+		t.Fatalf("prune networks: result=%#v err=%v", networkResult, err)
+	}
+	networkUpdate := waitForNetwork(t, ctx, networkSubscription.Events(), networkTarget, false)
+	if findNetwork(networkUpdate.Networks, networkSentinel).Name != networkSentinel {
+		t.Fatalf("network prune removed sentinel: %#v", networkUpdate)
+	}
+
+	waitForEventType(t, ctx, systemSubscription.Events(), systempage.EventDiskUsageUpdated)
+	waitForEventType(t, ctx, dashboardSubscription.Events(), dashboard.EventSummaryUpdated)
+}
+
+func TestSystemPruneAgainstDedicatedDocker(t *testing.T) {
+	fixture := dockerfixture.New(t)
+	fixture.RequireDedicatedDaemon(t)
+	environment := fixture.Environment()
+	ctx, cancel := context.WithTimeout(context.Background(), environment.Timeout)
+	defer cancel()
+	application, err := dockerplatform.NewBackend(ctx, dockerplatform.BackendConfig{
+		Endpoint: environment.DockerEndpoint, AllowSystemPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("construct production backend: %v", err)
+	}
+	t.Cleanup(func() { _ = application.Close(context.Background()) })
+	result, err := application.System().PruneSystem(ctx, systempage.SystemPruneOptions{Confirmation: systempage.SystemPruneConfirmation})
+	if err != nil || result.Command.OperationID != "system.prune" {
+		t.Fatalf("prune dedicated Docker daemon: result=%#v err=%v", result, err)
+	}
+}
+
 func assertComposeCommand(t *testing.T, result backend.CommandResult, err error) {
 	t.Helper()
 	if err != nil {
@@ -588,6 +880,35 @@ func findVolume(values []volumepage.Volume, name string) volumepage.Volume {
 	return volumepage.Volume{}
 }
 
+func waitForNetwork(t *testing.T, ctx context.Context, events <-chan backend.EventEnvelope, name string, present bool) networkpage.ListUpdated {
+	t.Helper()
+	for {
+		event := receiveIntegrationEvent(t, ctx, events)
+		update, ok := event.Payload.(networkpage.ListUpdated)
+		if ok && (findNetwork(update.Networks, name).Name != "") == present {
+			return update
+		}
+	}
+}
+
+func findNetwork(values []networkpage.Summary, name string) networkpage.Summary {
+	for _, value := range values {
+		if value.Name == name {
+			return value
+		}
+	}
+	return networkpage.Summary{}
+}
+
+func findNetworkConnection(values []networkpage.Connection, containerID string) networkpage.Connection {
+	for _, value := range values {
+		if value.ContainerID == containerID {
+			return value
+		}
+	}
+	return networkpage.Connection{}
+}
+
 func waitForRefreshReason(t *testing.T, ctx context.Context, events <-chan backend.EventEnvelope, reason backend.RefreshReason) backend.EventEnvelope {
 	t.Helper()
 	for {
@@ -645,6 +966,26 @@ func findContainer(values []containers.Summary, id string) containers.Summary {
 		}
 	}
 	return containers.Summary{}
+}
+
+func waitForContainerPresence(t *testing.T, ctx context.Context, events <-chan backend.EventEnvelope, containerID string, present bool) containers.ListUpdated {
+	t.Helper()
+	for {
+		event := receiveIntegrationEvent(t, ctx, events)
+		update, ok := event.Payload.(containers.ListUpdated)
+		if ok && (findContainer(update.Containers, containerID).ID != "") == present {
+			return update
+		}
+	}
+}
+
+func containsString(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func waitForStreamDone(t *testing.T, ctx context.Context, done <-chan error) {

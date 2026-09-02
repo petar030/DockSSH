@@ -199,7 +199,29 @@ func matchesEvent(filter backend.EventFilter, event backend.EventEnvelope) bool 
 	if event.Payload.EventType() == backend.EventSubscriberOverflow {
 		return true
 	}
-	return contains(filter.Types, event.Payload.EventType()) && contains(filter.Keys, event.Key)
+	if !contains(filter.Types, event.Payload.EventType()) || !contains(filter.Keys, event.Key) {
+		return false
+	}
+	observed, ok := dockerEvent(event.Payload)
+	if !ok {
+		return true
+	}
+	return contains(filter.DockerResources, observed.Resource) &&
+		contains(filter.DockerResourceIDs, observed.ResourceID) &&
+		contains(filter.DockerActions, observed.Action) &&
+		contains(filter.DockerProjects, observed.Project)
+}
+
+func dockerEvent(payload backend.EventPayload) (backend.DockerEventObserved, bool) {
+	switch value := payload.(type) {
+	case backend.DockerEventObserved:
+		return value, true
+	case *backend.DockerEventObserved:
+		if value != nil {
+			return *value, true
+		}
+	}
+	return backend.DockerEventObserved{}, false
 }
 
 func contains[T comparable](allowed []T, value T) bool {
@@ -217,6 +239,10 @@ func contains[T comparable](allowed []T, value T) bool {
 func cloneFilter(filter backend.EventFilter) backend.EventFilter {
 	filter.Types = append([]backend.EventType(nil), filter.Types...)
 	filter.Keys = append([]backend.RefreshKey(nil), filter.Keys...)
+	filter.DockerResources = append([]string(nil), filter.DockerResources...)
+	filter.DockerResourceIDs = append([]string(nil), filter.DockerResourceIDs...)
+	filter.DockerActions = append([]string(nil), filter.DockerActions...)
+	filter.DockerProjects = append([]string(nil), filter.DockerProjects...)
 	return filter
 }
 

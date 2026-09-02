@@ -39,3 +39,21 @@ func TestHistoryRejectsNonDockerEventsAndZeroCapacity(t *testing.T) {
 		t.Fatal("history accepted a non-Docker event")
 	}
 }
+
+func TestHistoryAppliesDockerEventFilters(t *testing.T) {
+	history := eventhub.NewHistory(4)
+	for _, observed := range []backend.DockerEventObserved{
+		{Resource: "container", ResourceID: "one", Project: "demo", Action: "start"},
+		{Resource: "container", ResourceID: "two", Project: "demo", Action: "stop"},
+		{Resource: "image", ResourceID: "one", Project: "", Action: "tag"},
+	} {
+		history.Add(backend.EventEnvelope{Payload: observed})
+	}
+	result := history.Recent(backend.EventFilter{
+		DockerResources: []string{"container"}, DockerResourceIDs: []string{"one"},
+		DockerProjects: []string{"demo"}, DockerActions: []string{"start"},
+	}, 0)
+	if len(result) != 1 || result[0].Payload.(backend.DockerEventObserved).ResourceID != "one" {
+		t.Fatalf("filtered history = %#v", result)
+	}
+}

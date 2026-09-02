@@ -26,3 +26,10 @@ func TestNormalizeDockerEvent(t *testing.T) {
 		t.Fatalf("event time = %v", event.OccurredAt)
 	}
 }
+
+func TestNormalizeDockerEventFallsBackToSecondTimestamp(t *testing.T) {
+	event := normalizeDockerEvent(events.Message{Time: 1_700_000_123})
+	if !event.OccurredAt.Equal(time.Unix(1_700_000_123, 0)) {
+		t.Fatalf("fallback event time = %v", event.OccurredAt)
+	}
+}

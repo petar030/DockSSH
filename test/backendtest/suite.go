@@ -7,6 +7,7 @@ import (
 
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/dashboard"
+	systempage "github.com/petar030/ssh-native-docker-tui/internal/backend/system"
 )
 
 // RunBackendConformance executes behavior shared by every production backend.
@@ -21,9 +22,9 @@ func RunBackendConformance(t *testing.T, factory BackendFactory, env Integration
 
 	t.Run("one refresh broadcasts a typed result to two observers", func(t *testing.T) {
 		instance := openBackend(t, factory, env)
-		key := backend.RefreshKey{Kind: backend.RefreshKindBackendStatus}
+		key := backend.RefreshKey{Kind: systempage.RefreshKindInfo}
 		filter := backend.EventFilter{
-			Types: []backend.EventType{backend.EventBackendStatusUpdated},
+			Types: []backend.EventType{systempage.EventInfoUpdated},
 			Keys:  []backend.RefreshKey{key},
 		}
 
@@ -49,11 +50,11 @@ func RunBackendConformance(t *testing.T, factory BackendFactory, env Integration
 		firstEvent := receiveEvent(t, ctx, first.Events())
 		secondEvent := receiveEvent(t, ctx, second.Events())
 		for position, event := range []backend.EventEnvelope{firstEvent, secondEvent} {
-			status, ok := event.Payload.(backend.BackendStatusUpdated)
+			status, ok := event.Payload.(systempage.InfoUpdated)
 			if !ok {
 				t.Fatalf("observer %d payload = %T", position+1, event.Payload)
 			}
-			if status.APIVersion == "" {
+			if status.Engine.APIVersion == "" {
 				t.Fatalf("observer %d received empty Docker API version", position+1)
 			}
 			if event.Key != key || event.Reason != backend.RefreshManual || event.Sequence == 0 {
@@ -72,7 +73,7 @@ func RunBackendConformance(t *testing.T, factory BackendFactory, env Integration
 		if err := instance.RequestRefresh(backend.PageSystem); err != nil {
 			t.Fatalf("refresh after first observer closed: %v", err)
 		}
-		if event := receiveEvent(t, ctx, second.Events()); event.Payload.EventType() != backend.EventBackendStatusUpdated {
+		if event := receiveEvent(t, ctx, second.Events()); event.Payload.EventType() != systempage.EventInfoUpdated {
 			t.Fatalf("remaining observer event = %#v", event)
 		}
 	})

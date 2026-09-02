@@ -79,30 +79,30 @@
 
 ## Slice 6: Networks tab
 
-- [ ] Define network DTOs, filters, options, and API contracts
-- [ ] Test and implement the network list window
-- [ ] Test and implement network details and connected-containers windows
-- [ ] Test and implement create, remove, and safely filtered prune actions
-- [ ] Test and implement container connect and disconnect actions
-- [ ] Verify assigned addresses and affected container/network refreshes
+- [x] Define network DTOs, filters, options, and API contracts
+- [x] Test and implement the network list window
+- [x] Test and implement network details and connected-containers windows
+- [x] Test and implement create, remove, and safely filtered prune actions
+- [x] Test and implement container connect and disconnect actions
+- [x] Verify assigned addresses and affected container/network refreshes
 
 ## Slice 7: Events tab
 
-- [ ] Define normalized Docker event DTOs and Events API contracts
-- [ ] Test and implement the recent-events window
-- [ ] Test and implement live filtered event subscriptions
-- [ ] Complete normalization and refresh mapping for all Docker actions supported by the Events tab
-- [ ] Verify slow subscribers cannot block Docker events or other sessions
-- [ ] Keep pause and clear behavior session-local for the future TUI
+- [x] Define normalized Docker event DTOs and Events API contracts
+- [x] Test and implement the recent-events window
+- [x] Test and implement live filtered event subscriptions
+- [x] Complete normalization and refresh mapping for all Docker actions supported by the Events tab
+- [x] Verify slow subscribers cannot block Docker events or other sessions
+- [x] Keep pause and clear behavior session-local for the future TUI
 
 ## Slice 8: System tab
 
-- [ ] Define System DTOs, prune reports, options, and API contracts
-- [ ] Test and implement Docker version and information windows
-- [ ] Test and implement the detailed disk-usage window
-- [ ] Test and implement safely scoped container, image, volume, and network prune actions
-- [ ] Test system prune only against an explicitly dedicated Docker daemon
-- [ ] Verify all affected Dashboard and resource updates are broadcast after prune
+- [x] Define System DTOs, prune reports, options, and API contracts
+- [x] Test and implement Docker version and information windows
+- [x] Test and implement the detailed disk-usage window
+- [x] Test and implement safely scoped container, image, volume, and network prune actions
+- [x] Test system prune only against an explicitly dedicated Docker daemon
+- [x] Verify all affected Dashboard and resource updates are broadcast after prune
 
 ## Final backend quality gates
 
@@ -121,3 +121,7 @@
 - [ ] Support an explicit Compose project directory
 - [ ] Exec into a container terminal
 - [ ] Edit docker compose using nano editor
+
+## Future nice-to-have: refresh throughput
+
+- [ ] Replace the single Refresh Manager read worker with a small bounded read-worker pool, while preserving at-most-one active read per refresh key, one queued rerun after an in-flight change, and page-update ordering safety. Keep this pool separate from Command Executor workers so slow reads cannot delay Docker commands.

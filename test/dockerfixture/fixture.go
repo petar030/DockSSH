@@ -244,13 +244,19 @@ func (fixture *Fixture) CreateVolume(ctx context.Context, suffix string) (string
 // CreateContainer creates, labels, and immediately tracks one isolated test
 // container. The configured image must already exist on the test daemon.
 func (fixture *Fixture) CreateContainer(ctx context.Context, suffix string, command []string) (string, error) {
+	return fixture.CreateContainerWithLabels(ctx, suffix, command, nil)
+}
+
+// CreateContainerWithLabels creates a tracked container with additional
+// fixture-scoped labels. It never omits the run-identifying fixture labels.
+func (fixture *Fixture) CreateContainerWithLabels(ctx context.Context, suffix string, command []string, labels map[string]string) (string, error) {
 	name := fixture.Name(suffix)
 	result, err := fixture.client.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: name,
 		Config: &containertypes.Config{
 			Image:  fixture.config.ContainerImage,
 			Cmd:    append([]string(nil), command...),
-			Labels: fixture.Labels(nil),
+			Labels: fixture.Labels(labels),
 		},
 	})
 	if err != nil {

@@ -81,6 +81,50 @@ func TestBusSlowSubscriberGetsOverflowAndRemainsUsable(t *testing.T) {
 	}
 }
 
+func TestDockerEventFilterDimensionsAndSlowSubscriberIsolation(t *testing.T) {
+	bus := eventhub.NewBus(eventhub.BusConfig{SubscriberBuffer: 1})
+	t.Cleanup(func() { _ = bus.Close() })
+	slow, err := bus.Subscribe(context.Background(), backend.EventFilter{Types: []backend.EventType{backend.EventDockerObserved}})
+	if err != nil {
+		t.Fatalf("subscribe slow observer: %v", err)
+	}
+	_ = slow
+	matching, err := bus.Subscribe(context.Background(), backend.EventFilter{
+		Types:             []backend.EventType{backend.EventDockerObserved},
+		DockerResources:   []string{"container"},
+		DockerResourceIDs: []string{"container-one"},
+		DockerActions:     []string{"start"},
+		DockerProjects:    []string{"demo"},
+	})
+	if err != nil {
+		t.Fatalf("subscribe filtered observer: %v", err)
+	}
+
+	for _, observed := range []backend.DockerEventObserved{
+		{Resource: "image", ResourceID: "container-one", Action: "start", Project: "demo"},
+		{Resource: "container", ResourceID: "other", Action: "start", Project: "demo"},
+		{Resource: "container", ResourceID: "container-one", Action: "stop", Project: "demo"},
+		{Resource: "container", ResourceID: "container-one", Action: "start", Project: "other"},
+	} {
+		if _, err := bus.Publish(backend.EventEnvelope{Payload: observed}); err != nil {
+			t.Fatalf("publish filtered observation: %v", err)
+		}
+	}
+	wanted := backend.DockerEventObserved{Resource: "container", ResourceID: "container-one", Action: "start", Project: "demo"}
+	if _, err := bus.Publish(backend.EventEnvelope{Payload: wanted}); err != nil {
+		t.Fatalf("publish matching observation: %v", err)
+	}
+	select {
+	case event := <-matching.Events():
+		if observed := event.Payload.(backend.DockerEventObserved); observed.Resource != wanted.Resource ||
+			observed.ResourceID != wanted.ResourceID || observed.Action != wanted.Action || observed.Project != wanted.Project {
+			t.Fatalf("filtered observation = %#v", observed)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("matching observer was blocked by slow observer")
+	}
+}
+
 func TestBusCancellationCloseAndConcurrentOrdering(t *testing.T) {
 	const publishers = 100
 	bus := eventhub.NewBus(eventhub.BusConfig{SubscriberBuffer: publishers})
