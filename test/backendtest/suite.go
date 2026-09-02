@@ -20,6 +20,14 @@ func RunBackendConformance(t *testing.T, factory BackendFactory, env Integration
 		env.Timeout = 30 * time.Second
 	}
 
+	t.Run("complete facade exposes every domain API", func(t *testing.T) {
+		instance := openBackend(t, factory, env)
+		if instance.Containers() == nil || instance.Compose() == nil || instance.Images() == nil ||
+			instance.Volumes() == nil || instance.Networks() == nil || instance.System() == nil {
+			t.Fatal("production Backend facade contains a nil domain API")
+		}
+	})
+
 	t.Run("one refresh broadcasts a typed result to two observers", func(t *testing.T) {
 		instance := openBackend(t, factory, env)
 		key := backend.RefreshKey{Kind: systempage.RefreshKindInfo}
@@ -103,6 +111,36 @@ func RunBackendConformance(t *testing.T, factory BackendFactory, env Integration
 		}
 	})
 
+	t.Run("shutdown closes active subscriptions and rejects new work", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), env.Timeout)
+		defer cancel()
+		instance, err := factory(ctx, env)
+		if err != nil {
+			t.Fatalf("construct backend: %v", err)
+		}
+		subscription, err := instance.Subscribe(context.Background(), backend.PageSystem, backend.EventFilter{})
+		if err != nil {
+			t.Fatalf("subscribe: %v", err)
+		}
+		if err := instance.Close(ctx); err != nil {
+			t.Fatalf("close backend: %v", err)
+		}
+		select {
+		case _, open := <-subscription.Events():
+			if open {
+				t.Fatal("subscription remained open after backend shutdown")
+			}
+		case <-ctx.Done():
+			t.Fatal("subscription did not close during backend shutdown")
+		}
+		if err := instance.RequestRefresh(backend.PageSystem); !backend.HasErrorCode(err, backend.ErrorStreamClosed) {
+			t.Fatalf("refresh after shutdown = %v", err)
+		}
+		if _, err := instance.Subscribe(context.Background(), backend.PageSystem, backend.EventFilter{}); !backend.HasErrorCode(err, backend.ErrorStreamClosed) {
+			t.Fatalf("subscription after shutdown = %v", err)
+		}
+	})
+
 	t.Run("Dashboard refresh publishes a complete real-Docker summary", func(t *testing.T) {
 		instance := openBackend(t, factory, env)
 		subscription, err := instance.Subscribe(context.Background(), backend.PageDashboard, backend.EventFilter{
@@ -144,7 +182,7 @@ func receiveEvent(t *testing.T, ctx context.Context, events <-chan backend.Event
 	}
 }
 
-func openBackend(t *testing.T, factory BackendFactory, env IntegrationEnvironment) backend.Backend {
+func openBackend(t *testing.T, factory BackendFactory, env IntegrationEnvironment) ConformanceBackend {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), env.Timeout)
 	defer cancel()

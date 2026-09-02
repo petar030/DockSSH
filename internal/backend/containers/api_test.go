@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/netip"
 	"reflect"
@@ -236,6 +237,40 @@ func TestSessionCancellationFinishesActiveStream(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("session cancellation did not finish stream")
+	}
+}
+
+func TestClosingActiveStreamClosesReaderAndChannelsDeterministically(t *testing.T) {
+	reader, writer := io.Pipe()
+	t.Cleanup(func() { _ = writer.Close() })
+	docker := &fakeDockerClient{
+		inspect: client.ContainerInspectResult{Container: containertypes.InspectResponse{Config: &containertypes.Config{}}},
+		logs:    reader,
+	}
+	api := newTestAPI(t, docker)
+	stream, err := api.Logs(context.Background(), "abc", LogsOptions{Follow: true})
+	if err != nil {
+		t.Fatalf("open logs: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("close stream: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("close stream again: %v", err)
+	}
+	select {
+	case err := <-stream.Done():
+		if err != nil {
+			t.Fatalf("stream shutdown error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stream did not finish after Close")
+	}
+	if _, open := <-stream.Values(); open {
+		t.Fatal("stream values remained open after Close")
+	}
+	if err := reader.Close(); err != nil && !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("reader was not safely closed: %v", err)
 	}
 }
 

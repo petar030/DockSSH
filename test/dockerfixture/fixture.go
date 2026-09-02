@@ -334,10 +334,33 @@ func (fixture *Fixture) Close() error {
 		ctx, cancel := context.WithTimeout(context.Background(), fixture.config.Timeout)
 		defer cancel()
 		cleanupErr := fixture.cleanup.run(ctx)
+		verificationErr := fixture.verifyNoLabeledResources(ctx)
 		clientErr := fixture.client.Close()
-		fixture.closeErr = errors.Join(cleanupErr, clientErr)
+		fixture.closeErr = errors.Join(cleanupErr, verificationErr, clientErr)
 	})
 	return fixture.closeErr
+}
+
+// verifyNoLabeledResources makes cleanup an asserted integration-test gate,
+// not merely a best-effort sequence of delete calls.
+func (fixture *Fixture) verifyNoLabeledResources(ctx context.Context) error {
+	filters := make(client.Filters)
+	for key, value := range fixture.config.ResourceLabels {
+		filters = filters.Add("label", key+"="+value)
+	}
+	containers, containerErr := fixture.client.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: filters})
+	networks, networkErr := fixture.client.NetworkList(ctx, client.NetworkListOptions{Filters: filters})
+	volumes, volumeErr := fixture.client.VolumeList(ctx, client.VolumeListOptions{Filters: filters})
+	if err := errors.Join(containerErr, networkErr, volumeErr); err != nil {
+		return fmt.Errorf("verify test resource cleanup: %w", err)
+	}
+	if len(containers.Items) != 0 || len(networks.Items) != 0 || len(volumes.Items) != 0 {
+		return fmt.Errorf(
+			"test resources remain after cleanup: containers=%d networks=%d volumes=%d",
+			len(containers.Items), len(networks.Items), len(volumes.Items),
+		)
+	}
+	return nil
 }
 
 func ignoreNotFound(err error) error {

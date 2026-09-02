@@ -76,6 +76,102 @@ func TestBackendConstructionFailureClosesOwnedClient(t *testing.T) {
 	}
 }
 
+func TestBackendShutdownCancelsOwnedWorkAndClosesSubscriptions(t *testing.T) {
+	key := backend.RefreshKey{Kind: "system.info"}
+	refreshStarted := make(chan struct{})
+	refreshCanceled := make(chan struct{})
+	hub, refreshes, commands := runtimeDependencies(
+		t,
+		backend.PageSystem,
+		key.Kind,
+		testkit.NewRecordingRefreshHandler(1, func(ctx context.Context, _ backend.RefreshKey) (backend.EventPayload, error) {
+			close(refreshStarted)
+			<-ctx.Done()
+			close(refreshCanceled)
+			return nil, ctx.Err()
+		}),
+	)
+	jobs, err := NewJobExecutor(JobExecutorConfig{Refreshes: refreshes, Publisher: hub, Capacity: 1})
+	if err != nil {
+		t.Fatalf("new Job Executor: %v", err)
+	}
+	owner := testkit.NewRecordingCloser(nil)
+	application, err := New(context.Background(), Config{
+		EventHub: hub, Refreshes: refreshes, Commands: commands, Jobs: jobs, OwnedDockerClient: owner,
+	})
+	if err != nil {
+		t.Fatalf("new Backend: %v", err)
+	}
+
+	subscription, err := application.Subscribe(context.Background(), backend.PageSystem, backend.EventFilter{})
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	if err := application.RequestRefresh(backend.PageSystem); err != nil {
+		t.Fatalf("request active refresh: %v", err)
+	}
+	<-refreshStarted
+
+	commandStarted := make(chan struct{})
+	commandDone := make(chan error, 1)
+	go func() {
+		_, commandErr := commands.Run(context.Background(), backend.CommandRequest{
+			OperationID: "test.command", Operation: "test command",
+			Affected: []backend.AffectedResource{{Kind: "test", ID: "command"}},
+			Run: func(ctx context.Context) error {
+				close(commandStarted)
+				<-ctx.Done()
+				return ctx.Err()
+			},
+		})
+		commandDone <- commandErr
+	}()
+	<-commandStarted
+
+	jobStarted := make(chan struct{})
+	job, err := jobs.Start(context.Background(), backend.JobRequest{
+		Page: backend.PageSystem, OperationID: "test.job", Operation: "test job",
+		Affected: []backend.AffectedResource{{Kind: "test", ID: "job"}},
+		Run: func(ctx context.Context, _ func(backend.ProgressEvent)) error {
+			close(jobStarted)
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	})
+	if err != nil {
+		t.Fatalf("start active job: %v", err)
+	}
+	<-jobStarted
+
+	closeCtx, cancelClose := context.WithTimeout(context.Background(), time.Second)
+	defer cancelClose()
+	if err := application.Close(closeCtx); err != nil {
+		t.Fatalf("close Backend: %v", err)
+	}
+
+	select {
+	case <-refreshCanceled:
+	default:
+		t.Fatal("active refresh was not canceled before shutdown returned")
+	}
+	if err := <-commandDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("active command error = %v", err)
+	}
+	if _, err := job.Wait(context.Background()); !backend.HasErrorCode(err, backend.ErrorCanceled) {
+		t.Fatalf("active job error = %v", err)
+	}
+	for range job.Progress() {
+	}
+	for range subscription.Events() {
+	}
+	if owner.Count() != 1 {
+		t.Fatalf("Docker owner close count = %d, want 1", owner.Count())
+	}
+	if err := application.RequestRefresh(backend.PageSystem); !backend.HasErrorCode(err, backend.ErrorStreamClosed) {
+		t.Fatalf("refresh after shutdown = %v", err)
+	}
+}
+
 func TestDockerEventPublishesRawObservationAndRefreshesDashboardIndependently(t *testing.T) {
 	key := backend.RefreshKey{Kind: "dashboard.summary"}
 	handler := testkit.NewRecordingRefreshHandler(1, func(context.Context, backend.RefreshKey) (backend.EventPayload, error) {

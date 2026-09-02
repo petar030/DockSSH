@@ -7,6 +7,12 @@ import (
 	"time"
 
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
+	composepage "github.com/petar030/ssh-native-docker-tui/internal/backend/compose"
+	"github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
+	"github.com/petar030/ssh-native-docker-tui/internal/backend/images"
+	"github.com/petar030/ssh-native-docker-tui/internal/backend/networks"
+	systempage "github.com/petar030/ssh-native-docker-tui/internal/backend/system"
+	"github.com/petar030/ssh-native-docker-tui/internal/backend/volumes"
 )
 
 // IntegrationEnvironment describes the isolated resources available to a
@@ -23,4 +29,14 @@ type IntegrationEnvironment struct {
 
 // BackendFactory constructs the real production backend. Tests subscribe before
 // requesting any initial data.
-type BackendFactory func(context.Context, IntegrationEnvironment) (backend.Backend, error)
+type ConformanceBackend interface {
+	backend.Backend
+	Containers() *containers.API
+	Compose() *composepage.API
+	Images() *images.API
+	Volumes() *volumes.API
+	Networks() *networks.API
+	System() *systempage.API
+}
+
+type BackendFactory func(context.Context, IntegrationEnvironment) (ConformanceBackend, error)

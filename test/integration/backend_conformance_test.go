@@ -1033,7 +1033,7 @@ func receiveIntegrationEvent(t *testing.T, ctx context.Context, events <-chan ba
 func productionBackendFactory(
 	ctx context.Context,
 	environment backendtest.IntegrationEnvironment,
-) (backend.Backend, error) {
+) (backendtest.ConformanceBackend, error) {
 	return dockerplatform.NewBackend(ctx, dockerplatform.BackendConfig{
 		Endpoint: environment.DockerEndpoint, ComposeRoots: []string{environment.ComposeRoot},
 	})

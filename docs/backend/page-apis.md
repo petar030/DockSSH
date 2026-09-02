@@ -1,0 +1,25 @@
+# Page APIs
+
+The complete production facade exposes `RequestRefresh`, `Subscribe`, `Close`, and accessors for Containers, Compose, Images, Volumes, Networks, and System. Dashboard and Events need no accessor because their public behavior is page refresh plus subscription.
+
+`ReadRefresh` functions are runtime callbacks registered with the Refresh Manager. They are not TUI operations even though they live on page API implementations.
+
+| Page | Refresh requests and results | Commands | Jobs | Streams |
+| --- | --- | --- | --- | --- |
+| Dashboard | `RequestRefresh(PageDashboard)` → `SummaryUpdated` | — | — | — |
+| Containers | page list; `RequestDetails`; `RequestProcesses` | `Start`, `Stop`, `Restart`, `Pause`, `Unpause`, `Kill`, `Rename`, `Remove` | — | `Logs`, `Stats` |
+| Compose | page project list; `RequestDetails` | `Start`, `Stop`, `Restart`, `Pause`, `Unpause`, `Scale` | `Up`, `Down`, `Pull`, `Build` | `Logs` |
+| Images | page list; `RequestDetails`; `RequestHistory` | `Tag`, `Remove`, `Prune` | `Pull` | — |
+| Volumes | page list; `RequestDetails`; `RequestAttachments` | `Create`, `Remove`, `Prune` | — | — |
+| Networks | page list; `RequestDetails`; `RequestConnections` | `Create`, `Remove`, `Prune`, `Connect`, `Disconnect` | — | — |
+| Events | `RequestRefresh(PageEvents)` → bounded `RecentUpdated`; live `DockerEventObserved` through subscription | — | — | — |
+| System | page info; `RequestDiskUsage` | `PruneContainers`, `PruneImages`, `PruneVolumes`, `PruneNetworks`, guarded `PruneSystem` | — | — |
+
+## Delivery model
+
+- Base and targeted refreshes return acceptance errors only; results arrive as typed events on that page bus.
+- Short commands return `CommandResult` or a stable error to a caller that is still waiting. Authoritative state follows through refresh events.
+- Jobs return a `Job` handle with progress, `Wait`, and `Cancel`; progress and completion are also page events.
+- Streams return ordered values and one terminal result through `Done`.
+
+Every public DTO and option type is defined in its page package. Docker SDK response types never cross this boundary. Container/Compose exec is intentionally outside the current version.

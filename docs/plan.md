@@ -1,7 +1,8 @@
 # SSH-Native Docker TUI — Project Plan
 
 This file is the permanent architectural source of truth. `docs/TODO.md` is the
-ordered product roadmap, and `docs/testing.md` defines verification rules.
+ordered product roadmap, `docs/testing.md` defines verification rules, and
+[`docs/backend/`](backend/README.md) is the detailed backend reference.
 
 ## Project goal
 

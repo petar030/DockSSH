@@ -94,6 +94,19 @@ type Application struct {
 	dependencies Dependencies
 }
 
+// Backend is the complete TUI-facing production facade. The embedded common
+// contract provides page refresh, subscription and shutdown; accessors expose
+// the domain APIs without leaking Docker SDK types.
+type Backend interface {
+	backend.Backend
+	Containers() *containers.API
+	Compose() *composepage.API
+	Images() *images.API
+	Volumes() *volumes.API
+	Networks() *networks.API
+	System() *systempage.API
+}
+
 // NewBackend constructs the production observer backend. Sessions subscribe
 // before requesting the initial status they need.
 func NewBackend(ctx context.Context, config BackendConfig) (*Application, error) {
@@ -283,3 +296,4 @@ func (application *Application) UsesSharedMobyClient() bool {
 }
 
 var _ backend.Backend = (*Application)(nil)
+var _ Backend = (*Application)(nil)

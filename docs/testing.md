@@ -2,6 +2,8 @@
 
 The backend is developed test-first. Tests describe behavior visible through
 the application API before the TUI exists; they are not a mock backend.
+Detailed component and lifecycle documentation starts in
+[`docs/backend/README.md`](backend/README.md).
 
 ## Production and test separation
 

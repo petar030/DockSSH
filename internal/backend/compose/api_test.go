@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	composetypes "github.com/compose-spec/compose-go/v2/types"
 	composeapi "github.com/docker/compose/v5/pkg/api"
@@ -200,6 +201,38 @@ func TestLogsReturnSessionOwnedTypedStream(t *testing.T) {
 	}
 }
 
+func TestClosingComposeLogStreamCancelsReaderAndClosesChannels(t *testing.T) {
+	started := make(chan struct{})
+	client := &fakeComposeClient{logsFunc: func(ctx context.Context, _ string, _ composeapi.LogConsumer, _ composeapi.LogOptions) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	}}
+	api := newTestAPI(t, client, &recordingRefreshRequester{}, t.TempDir())
+	stream, err := api.Logs(context.Background(), "demo", LogsOptions{Follow: true})
+	if err != nil {
+		t.Fatalf("open logs: %v", err)
+	}
+	<-started
+	if err := stream.Close(); err != nil {
+		t.Fatalf("close stream: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("close stream again: %v", err)
+	}
+	select {
+	case err := <-stream.Done():
+		if err != nil {
+			t.Fatalf("stream shutdown error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Compose stream did not finish after Close")
+	}
+	if _, open := <-stream.Values(); open {
+		t.Fatal("Compose stream values remained open after Close")
+	}
+}
+
 func TestUpBuildsBackendOwnedJobFromAllowedDefinition(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "compose.yaml")
@@ -331,6 +364,7 @@ type fakeComposeClient struct {
 	scaleOptions  composeapi.ScaleOptions
 	logEntries    []LogEntry
 	logOptions    composeapi.LogOptions
+	logsFunc      func(context.Context, string, composeapi.LogConsumer, composeapi.LogOptions) error
 	upProject     *composetypes.Project
 	lastOperation string
 }
@@ -373,7 +407,10 @@ func (client *fakeComposeClient) Scale(_ context.Context, project *composetypes.
 	return nil
 }
 
-func (client *fakeComposeClient) Logs(_ context.Context, _ string, consumer composeapi.LogConsumer, options composeapi.LogOptions) error {
+func (client *fakeComposeClient) Logs(ctx context.Context, project string, consumer composeapi.LogConsumer, options composeapi.LogOptions) error {
+	if client.logsFunc != nil {
+		return client.logsFunc(ctx, project, consumer, options)
+	}
 	client.logOptions = options
 	for _, entry := range client.logEntries {
 		switch entry.Source {

@@ -1,5 +1,9 @@
  TODO list for development
 
+The permanent architecture is in [`plan.md`](plan.md), detailed backend
+documentation is in [`backend/`](backend/README.md), and test procedures are in
+[`testing.md`](testing.md).
+
 - [x] Setup Go project
 - [x] Setup local git environment
 - [x] Develop a testing framework
@@ -106,12 +110,12 @@
 
 ## Final backend quality gates
 
-- [ ] Test and implement graceful shutdown during active refreshes, subscriptions, streams, and jobs
-- [ ] Verify cancellation and deterministic closure of every stream and job
-- [ ] Verify no goroutines, readers, subscriptions, streams, jobs, or Docker connections leak
-- [ ] Pass all unit and integration tests with the race detector
-- [ ] Confirm integration cleanup leaves no test resources behind
-- [ ] Complete the top-level Backend facade and full production conformance suite
+- [x] Test and implement graceful shutdown during active refreshes, subscriptions, streams, and jobs
+- [x] Verify cancellation and deterministic closure of every stream and job
+- [x] Verify no goroutines, readers, subscriptions, streams, jobs, or Docker connections leak
+- [x] Pass all unit and integration tests with the race detector
+- [x] Confirm integration cleanup leaves no test resources behind
+- [x] Complete the top-level Backend facade and full production conformance suite
 
 ## Future nice-to-have: fuller Compose invocation options
 
