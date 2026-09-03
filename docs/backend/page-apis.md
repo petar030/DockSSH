@@ -4,6 +4,19 @@ The complete production facade exposes `RequestRefresh`, `Subscribe`, `Close`, a
 
 `ReadRefresh` functions are runtime callbacks registered with the Refresh Manager. They are not TUI operations even though they live on page API implementations.
 
+## Targeted-refresh rule
+
+When a TUI opens or focuses a selected resource view, it calls that view's
+targeted request method. If the view remains visible after a relevant base-page
+update, it calls the targeted request again. For example, a Containers page
+showing container `A` calls `RequestDetails(A)` after receiving a relevant
+container-list update.
+
+This is session-local TUI behavior, not a backend `RefreshPolicy`. Periodic
+policies request only configured base page refreshes; the backend does not know
+which resource any session has selected. It is event-driven, not periodic TUI
+polling.
+
 | Page | Refresh requests and results | Commands | Jobs | Streams |
 | --- | --- | --- | --- | --- |
 | Dashboard | `RequestRefresh(PageDashboard)` → `SummaryUpdated` | — | — | — |

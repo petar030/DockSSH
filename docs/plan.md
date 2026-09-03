@@ -536,8 +536,16 @@ Container start/stop events do not do so because they do not change declared
 mounts or endpoints. Network `connect` and `disconnect` observations also
 request Containers because they change container inspect data. Event-triggered
 work requests base page refreshes because the backend stores no session
-selection. A TUI displaying targeted attachments/connections/details may
-re-request its selected target after the base update.
+selection.
+
+Targeted data is a TUI responsibility: when a user opens or focuses selected
+details, processes, history, attachments, connections, project details, or
+detailed disk usage, that TUI requests the corresponding targeted refresh. If
+the selected view remains visible after a relevant base-page update, the TUI
+requests it again. There is no periodic targeted-refresh policy or TUI polling:
+commands and Docker events cause the relevant base update, and the backend
+never stores a session's selected resource. Periodic backend policies refresh
+only configured base page data.
 
 `PageEvents` subscribers are never required for Dashboard or another page to
 refresh. Docker events are hints to re-read authoritative state, not final UI

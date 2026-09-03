@@ -22,6 +22,12 @@ TUI / scheduler / Docker event / command / job
 
 `RequestRefresh(page)` resolves a registered base key. Targeted page methods construct complete keys themselves. TUI code does not invoke `ReadRefresh` directly.
 
+The TUI requests targeted keys when it opens or focuses a selected view, then
+requests the same key again if that view stays visible after a relevant base
+page update. Targeted refreshes are not periodic policies because selection is
+session-local and the backend does not retain session selection state. There is
+no TUI timer for targeted reads.
+
 ## Pending behavior
 
 - The manager maintains an ordered bounded set of different pending keys.
