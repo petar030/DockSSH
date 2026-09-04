@@ -27,13 +27,537 @@ data it renders.
 - [Lip Gloss](https://github.com/charmbracelet/lipgloss) provides layout and
   styling.
 
-These dependencies are added when TUI implementation starts. Each Bubble Tea
-model owns its active page, selected row, filters, modal state, terminal size,
-rendered backend data, subscriptions and session-owned streams. TUI code uses
-the application Backend API and never imports Docker SDK types.
+The initial TUI supports Go 1.26.3 with Wish v2.0.3, Bubble Tea v2.0.9,
+Bubbles v2.2.1 and Lip Gloss v2.0.6. Each Bubble Tea model owns its active page,
+selected row, filters, modal state, terminal size, rendered backend data,
+subscriptions and session-owned streams. TUI code uses the application Backend
+API and never imports Docker SDK types.
 
 Wish and Bubble Tea may use several goroutines per session. Architecture does
 not rely on their exact goroutine count; it relies on context ownership.
+
+## Planned TUI code layout and MVU ownership
+
+The TUI is a separate layer from `internal/backend`. It owns only session-local
+Bubble Tea state and rendering; it never imports Docker SDK types or performs
+Docker calls itself.
+
+```text
+cmd/
+└── ssh-docker-tui/
+    └── main.go                    composition and application startup only
+
+internal/
+├── backend/                       Docker coordination and typed contracts
+├── platform/
+│   ├── docker/                    production Backend construction
+│   └── ssh/                       Wish server and one Bubble Tea program per session
+└── tui/
+    ├── app.go                     root model: tabs, active page, session lifecycle
+    ├── navigation.go              shared tab movement and quit behavior
+    ├── jobs.go                    session tracker for jobs started by this TUI
+    ├── styles.go                  shared Lip Gloss theme and layout helpers
+    ├── ui/
+    │   └── ui.go                  presentation-only sanitizing/truncation helpers
+    ├── dashboard/
+    │   ├── model.go
+    │   ├── update.go
+    │   └── view.go
+    ├── containers/
+    │   ├── model.go
+    │   ├── update.go
+    │   ├── view.go
+    │   └── streams.go             only when logs/stats logic warrants it
+    ├── compose/                   equivalent page-local MVU files
+    ├── images/
+    ├── volumes/
+    ├── networks/
+    ├── events/
+    └── system/
+```
+
+`main.go` constructs the production Backend and SSH server but contains no page
+behavior. The SSH layer creates one `tea.Program` and one root `tui.App` per
+SSH session. All sessions share the same Backend instance.
+
+`Backend.Close` is process ownership, not a per-session action. Only application
+startup/shutdown code in `main.go` closes the shared Backend after the SSH
+server has stopped accepting sessions. A page or disconnecting TUI closes only
+its own subscription and stream handles.
+
+The root `tui.App` owns session-wide state only: terminal dimensions, tab
+navigation, the active page, and final session cleanup. Each page owns its own
+MVU state: rendered DTOs, selected resource, filters, loading/error state,
+subscription, and any active stream. Page packages define their own Bubble Tea
+message types; only navigation, resize, and quit messages are shared.
+
+Do not introduce a generic universal page model, generic DTO renderer, or a
+separate shared subscription layer initially. Page event payloads and user
+interactions are domain-specific. Small mechanical helpers may be extracted
+later only after real duplication appears.
+
+`tui/ui` is one deliberately small exception for safe presentation primitives.
+It is a leaf package with no MVU or backend state, allowing both the root frame
+and page packages to sanitize and truncate untrusted Docker text without an
+import cycle.
+
+### Page entry, updates, and exit
+
+When a page becomes active, its page model:
+
+1. creates a page-derived session context;
+2. subscribes to its own Event Hub page bus;
+3. requests its base page refresh;
+4. waits for that subscription inside its own Bubble Tea command;
+5. converts received typed Event Hub payloads into that page's message types;
+6. updates only that session's page model in `Update`.
+
+When the page changes or the session ends, the page cancels its context and
+closes its subscription and active streams. It must not keep inactive page
+subscriptions running.
+
+For targeted views, the page requests the targeted backend refresh when a user
+opens or focuses the selected resource. After a relevant base-page update, it
+requests the targeted data again only if that selected view remains visible.
+This is event-driven behavior, not periodic targeted polling.
+
+### TUI streams and render cadence
+
+Container logs, container stats, and Compose logs are session-owned streams.
+The relevant page owns opening and closing them; backend page refreshes do not
+control their lifetime.
+
+- Logs redraw when a log message arrives; no fixed TUI refresh rate is needed.
+- Stats retain the newest received sample and redraw at a bounded TUI render
+  cadence, initially 250–500 ms, while the stats view is visible. This limits
+  terminal redraws without polling Docker or changing the backend stream.
+- Leaving the stream view cancels its page/view context or calls `Stream.Close`
+  so the underlying reader and stream goroutine terminate.
+
+## TUI implementation contract
+
+This section turns the backend contracts into rules for the future Bubble Tea
+implementation. It is deliberately more specific than a visual design: the
+same behavior must remain correct with multiple SSH sessions, delayed Docker
+responses, tab changes and terminal disconnects.
+
+### MVU execution rules
+
+Bubble Tea `Update` and `View` must remain fast and non-blocking. A page never
+calls a backend method, waits on a channel, or performs formatting with
+unbounded work directly inside either method. Instead, `Update` returns a
+`tea.Cmd`; that command performs one backend call or receives one value and
+returns a page-specific message.
+
+Each page defines messages for the work it owns, for example:
+
+```go
+type subscriptionReadyMsg struct {
+    generation uint64
+    subscription backend.Subscription
+}
+
+type eventReceivedMsg struct {
+    generation uint64
+    event      backend.EventEnvelope
+}
+
+type commandFinishedMsg struct {
+    generation uint64
+    result     backend.CommandResult
+    err        error
+}
+```
+
+The exact names may differ, but the activation `generation` is required. It is
+incremented whenever a page is entered again or its selected-resource view is
+replaced. Messages from an old subscription, request or stream are ignored.
+This prevents a late result from page A's old lifecycle overwriting page A
+after the user has left and returned.
+
+There is exactly one outstanding receive command per subscription or stream
+channel. After handling a value, the page schedules the next receive. Starting
+several receives for the same channel would make ordering and shutdown
+nondeterministic.
+
+`WindowSizeMsg`, keyboard input and backend messages may arrive in any order.
+Models therefore support zero/unknown terminal size, no selected row and data
+arriving before the first render. `View` is a pure rendering function and never
+changes model state.
+
+### Root and page state
+
+The root model owns only state that survives tab changes:
+
+- terminal width and height;
+- active tab and global navigation/help state;
+- session-wide notices and jobs initiated by this session;
+- the session context and final cleanup.
+
+A page model owns:
+
+- its current full page DTO and the time/reason of its last update;
+- identity-based selection, local sorting and local filters;
+- base and targeted loading/error/stale states;
+- modal/editor/confirmation state;
+- its active subscription and stream handles;
+- page activation and targeted-view generations.
+
+Selection is stored by stable resource identity, never only by row index. After
+a replacement list arrives, the page finds that identity in the new sorted and
+filtered list. If it disappeared, the page clears its targeted panels and picks
+the nearest valid row or no row. Backend DTOs are treated as immutable input;
+sorting and filtering operate on a page-owned copy or index view.
+
+Every data panel distinguishes at least these states:
+
+| State | Rendering behavior |
+| --- | --- |
+| Initial loading | Empty panel plus spinner; no false zero values |
+| Loaded | Current value plus optional last-updated indication |
+| Refreshing | Keep current value visible and show unobtrusive activity |
+| Stale/error | Keep the last successful value, mark it stale and show retry help |
+| Empty | Successful authoritative result with no rows |
+| Unavailable | A targeted operation is not valid for current resource state |
+
+An initial failure has no old data and therefore renders an error/empty state.
+A later `RefreshFailed` must not erase the last successful data.
+
+### Subscription and refresh rules
+
+Page activation follows one strict order: create a derived page context,
+subscribe to the page bus, then request its base refresh. A successful
+`RequestRefresh` only means the request was accepted; it contains no Docker
+data. The page becomes current only when its typed update event arrives.
+
+Only the active tab holds a subscription. On tab exit the page cancels its
+context, closes the subscription and streams, and invalidates its generation.
+On re-entry it subscribes and requests a fresh base result again. The model may
+retain its old DTO for a quick first render, but that DTO is marked stale until
+the new lifecycle receives an authoritative update.
+
+Targeted updates use the same shared page bus. Consequently another SSH
+session can request details for resource B while this session displays resource
+A. The page must check the event's full refresh key and payload identity and
+ignore B; it must also ignore an A response that belongs to an older selection
+generation. A page requests selected details when that view is opened/focused
+and again after a relevant base update if the selected view is still visible.
+There is no targeted timer and no backend state for "currently selected" data.
+
+`SubscriberOverflow` means at least one event for this subscription was lost;
+the subscription itself is still usable. The page marks its data stale and
+requests its base refresh plus every targeted panel that is currently visible.
+It does not automatically create a second subscription. Recovery requests can
+themselves fail when the Refresh Manager is closed or full, so the UI offers a
+manual retry rather than entering a tight retry loop.
+
+An unexpectedly closed subscription is a recoverable page error while the
+application is otherwise running. Re-entering the page may resubscribe. During
+normal page cancellation or application shutdown, channel closure is not shown
+as an error.
+
+Envelope sequence numbers are monotonic only within one page bus and reset when
+the application process restarts. They are useful for ordering/debugging, not
+as durable IDs or a replay cursor. `DroppedSequence` reports loss but the Event
+Hub cannot replay that sequence. The refresh reason is diagnostic metadata;
+deduplicated requests retain the newest reason, so rendering must not depend on
+observing every intermediate reason.
+
+Docker events are refresh hints, not authoritative page data. The backend
+publishes raw observations to the Events page and independently asks the
+Refresh Manager for affected base pages. Other pages subscribe only to their
+own typed page updates; they never need a `PageEvents` subscription.
+
+### Command behavior in the TUI
+
+Short commands are invoked in a Bubble Tea command. The caller's context
+controls submission and waiting, but after queue acceptance a backend worker
+owns execution. If the user changes tabs or disconnects, the accepted Docker
+operation can still finish and request refreshes.
+
+A successful `CommandResult` means the Docker callback completed and affected
+refreshes were requested. It is useful for a notice and operation metadata, but
+it is not the authoritative new resource state. Pages do not optimistically
+change Docker state and do not wait forever for an event correlated by
+`OperationID`; the next typed page update is authoritative. The executor also
+requests refreshes after an attempted mutation returns an ambiguous Docker
+error because Docker state may nevertheless have changed.
+
+While this session is waiting for a command, disable the identical action for
+the same resource and show progress. Do not assume global exclusion: another
+session or Docker client may issue a conflicting command. Queue-full/conflict
+errors are retryable UI errors, not crashes.
+
+`CommandResult` contains `OperationID`, affected resource identities and the
+refresh keys requested by the executor. `Asynchronous` is currently false for
+all short commands and is reserved contract space; jobs use `Job` instead. A
+non-zero result can accompany an error. In particular, the executor joins the
+Docker callback error with any post-command refresh-submission error. Therefore
+the TUI preserves useful result metadata, checks error codes with
+`backend.HasErrorCode`/`errors.Is` rather than matching strings, and describes
+the final state as uncertain until a typed refresh succeeds.
+
+Map stable backend error codes consistently:
+
+| Error code | TUI treatment |
+| --- | --- |
+| `invalid_input` | Keep the editor/modal open and identify the invalid field |
+| `not_found` | Notify the user, clear vanished selection, request the base page |
+| `conflict` | Explain current-state/busy conflict and allow retry after refresh |
+| `permission_denied` | Explain daemon/application policy; do not retry automatically |
+| `daemon_unavailable` | Mark affected data stale and provide manual retry |
+| `timeout` | Report unknown/unfinished outcome and wait for authoritative refresh |
+| `canceled` | Usually silent on navigation; visible when explicitly canceled |
+| `stream_closed` | End the stream view cleanly unless accompanied by a cause |
+| `unsupported` | Disable or hide the unavailable operation after reporting it |
+| `internal` | Preserve data and show a concise diagnostic without secrets |
+
+Joined errors can contain more than one stable code. The initial TUI should
+prefer the most actionable/safety-relevant presentation (permission denied,
+daemon unavailable, timeout, conflict, then internal), while still treating
+the resource view as stale. The current backend does not separately expose
+"Docker operation error" and "refresh submission error"; richer wording would
+require a future structured command-outcome contract.
+
+Destructive actions require a focused confirmation modal. This includes
+resource removal, prune, Compose down with volume removal, and broad system
+prune. Kill and force removal require visibly stronger wording. The broad
+system prune UI must require the exact backend confirmation token and must not
+silently enable volume deletion. Backend validation remains the final safety
+boundary.
+
+### Long-running job behavior
+
+Compose up/down/pull/build and image pull return a `Job` after acceptance. The
+executor allows a bounded number of active jobs (four by default), has no
+waiting queue, and rejects conflicting work for the same normalized project or
+image key.
+
+Jobs started by this TUI are tracked at the root/session level, not in the
+active page model. A session-derived context continuously receives their
+best-effort progress and calls `Wait`; switching tabs must not abandon them.
+`JobFinished`/`Wait`, not a progress status string, is the terminal truth.
+Progress status text is extensible Docker/Compose data and must tolerate values
+other than `started`, `loading`, `running`, `completed`, `failed` and
+`canceled`.
+
+The direct handle is the primary source for a job started by this session. To
+avoid displaying every update twice, page Event Hub progress with a matching
+locally tracked job ID is ignored or merged by sequence. Page events still let
+an active page show jobs started by another session. A cancel action is an
+explicit mutation of shared backend work and therefore requires confirmation;
+leaving the page does not cancel a job.
+
+Progress is allowed to drop under load, so the UI shows the newest known status
+rather than relying on every intermediate step. `Job.Wait` is the reliable
+terminal result. Completion refreshes affected pages, and their typed data—not
+the job's progress text—determines final Docker state.
+
+After terminal completion, `JobResult` contains the job ID, affected resources,
+requested refresh keys and completion time even when the job itself failed. A
+TUI wait context that expires before completion instead returns no terminal
+result and does not stop the job. `JobFinished.Err == nil` means successful
+terminal execution; a canceled/failed job still triggers its declared
+authoritative refreshes. Capacity and conflict rejection happens before a
+`Job` handle exists.
+
+Known first-version limitation: the backend has no persistent job registry or
+job history. A disconnected initiating session loses its handle, and a session
+that was not subscribed to the owning page may miss its progress/completion
+events. The Docker operation still runs and the resource page is authoritative
+when next opened, but there is no job reattachment UI.
+
+### Stream behavior
+
+Container logs, container stats and Compose logs bypass the executors because
+they are session-owned reads. Open them using a view-derived context. Every
+stream message includes a local stream ID/generation; values arriving after a
+selection or view change are discarded. `Close` is idempotent and is always
+called when the view closes, the page changes or the SSH session ends.
+
+Log views use a bounded client-side ring buffer (initially about 2,000 rendered
+lines, configurable later) so a busy container cannot consume unbounded
+memory. Docker log entries may be chunks rather than complete lines, so the
+page preserves an incomplete trailing fragment and splits complete lines before
+inserting them. Follow mode redraws on arrival; non-follow mode ends normally
+when the stream closes.
+
+Stats keep only the latest sample and render it at a 250–500 ms cadence while
+visible. That tick is a terminal redraw limit, not a Docker polling interval.
+When no new sample exists, no additional historical samples are invented.
+
+The stream `Done` channel supplies one terminal error and closes. Normal view
+cancellation is not presented as failure. An unexpected error remains in the
+stream panel with retry/reopen help. Opening processes or stats for a stopped
+container may produce a Docker conflict; this is a nonfatal unavailable state,
+not a page-wide failure.
+
+### Typed page event routing
+
+The TUI switches on concrete payload types after the envelope has arrived on
+the correct page subscription. Unknown future payload types are ignored and
+optionally logged; they never crash the session.
+
+| Bus | Base payload | Targeted payloads | Other payloads the page handles |
+| --- | --- | --- | --- |
+| Dashboard | `dashboard.SummaryUpdated` | None | `RefreshFailed`, `SubscriberOverflow` |
+| Containers | `containers.ListUpdated` | `DetailsUpdated`, `ProcessesUpdated` keyed by container ID | `RefreshFailed`, `SubscriberOverflow` |
+| Compose | `compose.ProjectsUpdated` | `ProjectUpdated` keyed by project name | `JobProgressed`, `JobFinished`, failures/overflow |
+| Images | `images.ListUpdated` | `DetailsUpdated`, `HistoryUpdated` keyed by image ID | `JobProgressed`, `JobFinished`, failures/overflow |
+| Volumes | `volumes.ListUpdated` | `DetailsUpdated`, `AttachmentsUpdated` keyed by volume name | `RefreshFailed`, `SubscriberOverflow` |
+| Networks | `networks.ListUpdated` | `DetailsUpdated`, `ConnectionsUpdated` keyed by network ID | `RefreshFailed`, `SubscriberOverflow` |
+| Events | `events.RecentUpdated` | None | `DockerEventObserved`, failures/overflow |
+| System | `system.InfoUpdated` | `DiskUsageUpdated` | `RefreshFailed`, `SubscriberOverflow` |
+
+Filters are copied when `Subscribe` is called. Changing a live Events-page
+filter therefore requires a controlled resubscription. Subscribe the
+replacement before closing the old subscription where possible, then request
+the bounded recent window to reconcile the handover; duplicate observations
+may be removed by their normalized fields/time for display purposes.
+
+### Backend call return semantics for page authors
+
+| Call category | Immediate/direct return | Later asynchronous observation |
+| --- | --- | --- |
+| `Subscribe` | A subscription handle or validation/closed/canceled error | Ordered matching envelopes until context cancellation or `Close` |
+| Base `RequestRefresh` | Acceptance, deduplication, unsupported, full or closed error; never data | Typed base payload or keyed `RefreshFailed` on the page bus |
+| Targeted `RequestDetails`-style call | The same refresh-request acceptance semantics; never data | Typed payload/`RefreshFailed` with the requested full key |
+| Short command | `CommandResult` plus optional error after the TUI's wait ends | Affected typed page updates are requested independently |
+| Job start | `Job` handle, or validation/capacity/conflict/closed error | Best-effort handle/page progress, reliable `Wait`, page `JobFinished`, then affected refreshes |
+| Stream open | A stream handle or immediate validation/open error where the implementation opens eagerly | Ordered values plus exactly one terminal `Done` outcome; deferred open failures also arrive here |
+| System prune | `PruneResult{Command, Report}` on full success; command metadata may accompany error | Affected resource/Dashboard/System refreshes |
+
+Request acceptance is not Docker success. Conversely, canceling only a TUI
+wait after backend acceptance is not Docker cancellation. Page code must keep
+those concepts separate in spinner, notice and error wording.
+
+### Page-specific UI requirements and backend edge cases
+
+| Page | Required TUI behavior and special cases |
+| --- | --- |
+| Dashboard | Subscribe/request `PageDashboard`; render engine, counts, disk usage and bounded recent Docker events as one summary. Recent-event count is process-lifetime backend history, not all daemon history. No commands or streams. |
+| Containers | Base list plus keyed details/process events. Treat Docker `State`, `Status` and `Health` as open-ended strings. Processes/stats can be unavailable for stopped containers. Show environment variable names and values in details. Commands: start, stop, restart, pause, unpause, kill, rename, remove. Logs and stats are view-owned streams. |
+| Compose | Active project discovery comes from Docker labels; file-based operations require an explicit project spec whose Compose files lie under configured roots. Treat project/service/container status and health as open-ended. Short commands are start, stop, restart, pause, unpause and scale; up, down, pull and build are jobs; logs are streams. Interactive exec is deferred. |
+| Images | Base list plus keyed details/history. Filters are session-local. Tag/remove/prune are commands and pull is a job. Pull platform must be `os/arch[/variant]`. Prune requires an explicit safe filter and rejects `dangling=false`. |
+| Volumes | Base list plus keyed details/attachments. Render `UsageKnown == false` as unknown—not zero—and show list warnings without discarding valid rows. Create/remove/prune are commands. Prune requires labels; an in-use removal is a conflict. |
+| Networks | Base list plus keyed details/connections and assigned addresses. Create/remove/prune/connect/disconnect are commands. Network prune requires age or labels. Docker 29 may report removal with active endpoints as permission denied; the backend deliberately translates this case to `conflict`, so advise disconnecting endpoints instead of showing an authorization failure. |
+| Events | Subscribe to `PageEvents` for both `RecentUpdated` and raw `DockerEventObserved`; backend filters may narrow resource/action/project. The live feed remains active while this tab is open; v1 has no pause action or paused-event buffer. Clear erases only displayed session rows, never backend history. History is bounded and exists only for this application process. |
+| System | Base refresh returns version/info; detailed disk usage is a targeted event. Resource-specific prune calls return a `PruneResult` containing the report as well as command metadata. Broad prune may be disabled at bootstrap and requires the exact confirmation token; volumes remain a separate opt-in. Never render unknown usage as a confirmed zero. |
+
+All list searching, sorting and filtering is session-local unless an API contract
+explicitly states otherwise. A page may receive data caused by another TUI,
+the scheduler, a Docker event, a command or a job; the rendering path is the
+same regardless of refresh reason.
+
+### Terminal safety, responsive layout and accessibility
+
+Docker-controlled names, labels, log text, event attributes and error causes
+are untrusted terminal input. Strip or visibly escape control sequences before
+rendering while preserving intentional line breaks/tabs in log processing.
+Never allow Docker output to emit terminal escape commands. Avoid showing
+registry credentials or sensitive error data. V1 deliberately shows Docker
+container/image environment values; masking may be added later if required.
+
+The root view reserves header/tab, content and footer/status areas, then gives
+the remaining dimensions to the active page. Every page supports a documented
+minimum size and renders a compact "terminal too small" view instead of
+panicking or producing negative dimensions. Long IDs and paths are truncated
+visually without modifying their stored values. Color is supplementary: state
+and errors remain understandable from text/icons when color is unavailable.
+
+Global navigation is disabled while a text editor or confirmation modal owns
+focus, except for an explicit cancel/quit sequence. Key bindings and help text
+come from one shared navigation definition so displayed help cannot drift from
+actual behavior.
+
+### TUI verification rules
+
+Tests primarily exercise pure page `Update`/`View` behavior with fake
+frontend-facing backend APIs and controlled messages. They must cover:
+
+- subscribe-before-refresh ordering and cleanup on tab/session exit;
+- stale-generation, mismatched-target and out-of-order message rejection;
+- initial/loading/loaded/empty/stale/error transitions;
+- overflow recovery without a retry loop;
+- identity-based selection across replacement, sorting and filtering;
+- command queue rejection, backend error mapping and authoritative refresh;
+- job progress loss, reliable terminal completion, tab switching and cancel;
+- stream closure, late stream messages, partial log chunks and bounded history;
+- zero, minimum, narrow and wide terminal dimensions;
+- terminal-control sanitization and environment-value rendering;
+- destructive confirmation flows and exact system-prune confirmation;
+- two simulated sessions receiving shared updates without sharing UI state.
+
+Broad full-screen golden files are optional because they are brittle. Prefer
+focused assertions on state transitions and key rendered regions, with a small
+number of stable visual snapshots for the root layout. SSH integration tests
+verify that two sessions get independent programs, disconnect cleanup is
+complete and backend shutdown ends both sessions. Manual tests run first in a
+loopback SSH session, then in two concurrent loopback sessions against a
+disposable Docker fixture.
+
+### Initial layout and key map
+
+The initial full layout targets terminals of at least 80 columns by 24 rows.
+Smaller terminals show a resize message and only the quit/help controls. The
+root layout uses one title/connection row, one horizontal tab row, the remaining
+space for page content, and two footer rows for status and contextual help.
+
+At 120 columns and wider, list/detail pages use a roughly 40/60 horizontal
+split. Between 80 and 119 columns they show one primary panel at a time and use
+`enter`/`esc` to move between list and details. Dashboard cards use two columns
+when they fit and one column otherwise. Modals are centered within the content
+area and never exceed the terminal bounds.
+
+The initial global key map is deliberately small and may evolve with the page
+implementations:
+
+| Keys | Action |
+| --- | --- |
+| `[` / `]`, `1`–`8` | Previous/next tab or direct tab selection |
+| `up`/`down`, `j`/`k` | Move within the focused list |
+| `tab` / `shift+tab` | Move focus between visible panels or form fields |
+| `enter` | Open details, accept a non-destructive choice, or activate focus |
+| `esc` | Close/back/cancel the current view or modal |
+| `f` | Focus the current page's find/filter input |
+| `r` | Request the active page's authoritative refresh |
+| `a` | Open the selected resource's actions menu where one exists |
+| `?` | Toggle contextual help |
+| `q` | Quit from normal navigation mode |
+| `ctrl+c` | End the TUI session from any mode |
+
+Text editors and confirmation dialogs consume ordinary character keys before
+global navigation. Every page footer displays only currently valid bindings;
+page-specific shortcuts are introduced with that page rather than reserved in
+advance.
+
+### Resolved TUI/SSH product decisions
+
+- Client authentication is deferred. Until it exists, the SSH server binds to
+  loopback by default and must not silently expose Docker control on a public
+  interface. A persistent generated server host key is still required because
+  host identity is separate from client authentication.
+- There is no separate direct local-terminal application mode. Development and
+  manual testing use the same Wish/SSH path as production, initially through
+  loopback.
+- The initial responsive layout, 80x24 minimum and provisional key map are
+  defined above and may be refined during page implementation.
+- Container and image inspect environment entries show both names and values.
+  Optional masking or reveal controls can be considered later.
+- The Events page has no pause action and no paused-event buffer. It continually
+  consumes live events while active; clear remains session-local.
+- Locally initiated jobs appear in a compact global footer summary. Selecting
+  that summary opens a session-level job overlay; backend reattachment/history
+  remains outside v1.
+
+Two existing backend return-contract limitations do not block the first TUI
+slices but must be revisited before polishing command/System messaging:
+
+- short-command errors join Docker execution and refresh-submission failures,
+  so the UI cannot always state which phase failed;
+- System prune returns command metadata but omits the prune report whenever the
+  joined executor error is non-nil, including the rare case where pruning
+  succeeded but a subsequent refresh request failed.
 
 ## Process, goroutine and context ownership
 
@@ -300,7 +824,7 @@ opens a stream through `api.go`, but its view/session context owns its lifetime.
 
 ### TUI-accessible common Backend API
 
-Every TUI page may use only this common facade:
+Every TUI page uses the refresh and subscription portion of the common facade:
 
 ```go
 type Backend interface {
@@ -309,6 +833,10 @@ type Backend interface {
     Close(context.Context) error
 }
 ```
+
+`Close` appears on the shared interface because the application composition
+root owns shutdown. An individual TUI session must never call it. Domain page
+accessors provide the additional operations listed below.
 
 `RequestRefresh` is a generic request for a page's registered base refresh. It
 is intentionally not TUI-only: manual page entry, a scheduler, Docker events,
@@ -394,8 +922,9 @@ remain session-local.
 `Backend.RequestRefresh(PageEvents)` publishes a newest-first `RecentUpdated`
 window from that same history; the update itself is not inserted back into
 history. Live subscriptions support resource, resource-ID, action and project
-filters. Pause and clear are future Bubble Tea model actions only: they never
-pause the process listener or erase shared history.
+filters. The TUI's clear action affects only that session's displayed rows; it
+never pauses the process listener or erases shared history. V1 has no pause
+action.
 
 **System.** `Backend.RequestRefresh(PageSystem)` publishes Docker version and
 host information; `RequestDiskUsage` publishes verbose aggregate and per-item

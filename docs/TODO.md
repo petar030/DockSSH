@@ -97,7 +97,8 @@ documentation is in [`backend/`](backend/README.md), and test procedures are in
 - [x] Test and implement live filtered event subscriptions
 - [x] Complete normalization and refresh mapping for all Docker actions supported by the Events tab
 - [x] Verify slow subscribers cannot block Docker events or other sessions
-- [x] Keep pause and clear behavior session-local for the future TUI
+- [x] Keep Events display control session-local; the future TUI may clear its
+      rows without pausing ingestion or altering shared history
 
 ## Slice 8: System tab
 
@@ -117,6 +118,184 @@ documentation is in [`backend/`](backend/README.md), and test procedures are in
 - [x] Confirm integration cleanup leaves no test resources behind
 - [x] Complete the top-level Backend facade and full production conformance suite
 
+# TUI implementation
+
+Implement the terminal interface incrementally. Each slice must leave a usable,
+tested application and must use the existing backend contracts; page models do
+not import Docker SDK packages or introduce a second resource cache. The TUI
+contract and edge cases are specified in [`plan.md`](plan.md#tui-implementation-contract).
+
+## TUI Slice 0: Session shell and shared behavior
+
+- [x] Resolve and document the initial SSH exposure, host-key, layout, key-map,
+      Events-feed and secret-display choices in `plan.md`
+- [x] Add compatible Wish, Bubble Tea, Bubbles and Lip Gloss dependencies and
+      record the supported Go/library versions
+- [x] Create the root MVU model with header, tabs, content, footer/status,
+      responsive sizing, help and quit behavior
+- [x] Define page activation/deactivation without a universal generic page
+      model; page packages own their message and model types
+- [x] Implement activation generations for the Dashboard lifecycle and retain
+      the same mandatory rule for later targeted views, commands and streams
+- [x] Implement shared page status plus Dashboard loading/stale/error
+      presentation without coupling page DTOs together
+- [x] Implement terminal-control sanitization, safe truncation and consistent
+      rendering that does not depend on color alone
+- [x] Add the Wish SSH adapter with one independent Bubble Tea program per
+      session, one shared process-wide Backend, loopback-only unauthenticated
+      v1 access and a persistent generated server host key
+- [x] Test resize-before-data, very small terminals, tab/help focus, independent
+      session models, disconnect cleanup and graceful backend/server shutdown;
+      manually verify two real SSH sessions
+
+## TUI Slice 1: Dashboard page
+
+- [x] Implement the Dashboard page-local model, messages, update and view
+- [x] Subscribe before requesting the initial Dashboard refresh and close the
+      subscription whenever the tab becomes inactive
+- [x] Render Engine identity/availability, resource counts, disk usage and the
+      bounded recent Docker-event summary
+- [x] Distinguish initial loading, empty, refreshing and stale/error states while
+      preserving the last successful summary after `RefreshFailed`
+- [x] Recover from `SubscriberOverflow` through one authoritative base refresh
+- [x] Test scheduled, manual, Docker-event and cross-session Dashboard updates
+- [x] Manually verify the Dashboard through one and two loopback SSH sessions
+
+## TUI Slice 2: Containers page
+
+- [ ] Decide whether the documented joined command/refresh error limitation
+      needs a structured backend outcome before finalizing command messaging
+- [ ] Implement the container list, session-local search/state/label filters,
+      sorting and identity-based selection
+- [ ] Implement keyed details and processes panels; ignore updates for another
+      session's selected container and stale selection generations
+- [ ] Show container environment variable names, always mask their values in
+      v1, and render unknown Docker status/health strings safely
+- [ ] Implement start, stop, restart, pause, unpause, kill, rename and remove via
+      asynchronous Bubble Tea commands and the existing Command Executor API
+- [ ] Add confirmations for kill, remove, force and volume-removal options; map
+      all stable backend error codes to recoverable UI states
+- [ ] Implement logs with partial-line assembly, terminal sanitization and a
+      bounded line ring; implement stats with latest-sample storage and bounded
+      250–500 ms rendering
+- [ ] Treat stopped-container processes/stats conflicts as targeted-panel
+      unavailability rather than whole-page failure
+- [ ] Test command wait cancellation, authoritative post-command updates,
+      mismatched keyed events, vanished selection, stream closure and overflow
+- [ ] Manually verify all commands, logs and stats on disposable running and
+      stopped containers without modifying unrelated resources
+
+## TUI Slice 3: Compose page and session job tracking
+
+- [ ] Add the root/session job tracker before the first job-owning page; keep
+      accepted jobs alive and observable across tab changes
+- [ ] Implement active-project list, session-local filtering and identity-based
+      selection
+- [ ] Implement keyed project details/services/containers and tolerate unknown
+      Compose/Docker status and health strings
+- [ ] Implement project-spec input with clear validation for project name,
+      services, profiles and Compose files beneath configured roots
+- [ ] Implement start, stop, restart, pause, unpause and scale as short commands
+- [ ] Implement up, down, pull and build as jobs with best-effort progress,
+      reliable `Wait`, conflict/capacity errors and explicit cancellation
+- [ ] Merge or suppress duplicate progress received from a local `Job` handle
+      and the page Event Hub by job ID
+- [ ] Implement Compose logs as a bounded, sanitized, page-owned stream
+- [ ] Confirm destructive down/volume-removal actions and document that job
+      reattachment/history after SSH disconnect is unavailable in v1
+- [ ] Test tab switching during jobs, progress loss, completion refreshes,
+      per-project conflict, job capacity and disconnect survival
+- [ ] Manually verify commands/jobs/logs using Compose files inside a disposable
+      allowed root; leave interactive Compose exec deferred
+
+## TUI Slice 4: Images page
+
+- [ ] Implement image list, session-local filters, identity selection, details
+      and history panels
+- [ ] Show image environment variable names but always mask their values in v1
+- [ ] Implement tag and remove commands with validation and destructive
+      confirmation
+- [ ] Implement the safely filtered prune editor; never turn its zero value or
+      `dangling=false` into a broad prune
+- [ ] Implement image pull through the session job tracker, including validated
+      `os/arch[/variant]` platform input and extensible Docker progress statuses
+- [ ] Test keyed-event isolation, unknown/missing image state, prune validation,
+      pull conflict/capacity and image/Dashboard/disk-usage refreshes
+- [ ] Manually verify against fixture images without pruning unrelated images
+
+## TUI Slice 5: Volumes page
+
+- [ ] Implement volume list, session-local filters, identity selection, details
+      and attached-container panels
+- [ ] Render list warnings without discarding valid data and render unknown usage
+      as unknown rather than zero
+- [ ] Implement create and remove with validation, confirmation and clear in-use
+      conflict handling
+- [ ] Implement label-scoped prune input; explain that `All` broadens eligible
+      named volumes but does not remove the required label scope
+- [ ] Test mismatched targeted events, attachment refreshes, warning display,
+      unknown usage, conflict and safe prune validation
+- [ ] Manually verify only against uniquely labeled disposable volumes
+
+## TUI Slice 6: Networks page
+
+- [ ] Implement network list, session-local filters, identity selection, details,
+      IPAM and connected-container/address panels
+- [ ] Implement create, remove, connect and disconnect forms with field-level
+      validation and destructive confirmation where appropriate
+- [ ] Implement age/label-scoped network prune input
+- [ ] Render removal with active endpoints as a conflict that advises
+      disconnecting endpoints, including Docker 29's translated response
+- [ ] Test address rendering, keyed-event isolation, container/network refreshes,
+      conflict mapping and safe prune validation
+- [ ] Manually verify with uniquely labeled disposable networks/endpoints
+
+## TUI Slice 7: Events page
+
+- [ ] Subscribe to `PageEvents` for the initial `RecentUpdated` window and raw
+      live `DockerEventObserved` events in the same page lifecycle
+- [ ] Implement session-local resource, ID, action and Compose-project filters
+      using backend subscription filters where a resubscription is warranted
+- [ ] Implement session-local clear without altering shared backend history
+- [ ] Bound displayed event rows and safely render untrusted attributes
+- [ ] Test newest-first history, live ordering, clear, filtering, overflow
+      recovery and two-session independence
+- [ ] Manually verify Docker activity updates Events and affected resource pages
+      independently
+
+## TUI Slice 8: System page
+
+- [ ] Resolve or explicitly accept the documented case where a successful prune
+      report is unavailable if its later refresh submission also returns error
+- [ ] Implement Docker version/host information and targeted detailed disk-usage
+      panels with correct unknown/zero handling
+- [ ] Implement safely narrowed container, image, volume and network prune forms
+      and render typed prune reports
+- [ ] Implement broad system prune only when product configuration permits it,
+      requiring the exact confirmation token and a separate volumes opt-in
+- [ ] Map bootstrap-disabled system prune to a clear unavailable/policy state
+- [ ] Test targeted refresh generations, every prune guard, report rendering,
+      stale/error preservation and all affected page updates
+- [ ] Manually test scoped prune with disposable labeled fixtures; test broad
+      system prune only against an explicitly dedicated Docker daemon
+
+## Final TUI quality gates
+
+- [ ] Run formatting, vet, unit, race and repeated concurrency-sensitive TUI/SSH
+      tests and verify no page subscription, stream, job watcher or session leaks
+- [ ] Verify every page at minimum, narrow and wide terminal sizes and without
+      relying on color for meaning
+- [ ] Verify terminal escape sequences in names, labels, logs, attributes and
+      errors cannot control the user's terminal
+- [ ] Verify two simultaneous SSH sessions keep independent selection/filter/UI
+      state while receiving shared authoritative backend updates
+- [ ] Verify disconnects during queued commands, active commands, refreshes,
+      streams and jobs follow the ownership rules documented in `plan.md`
+- [ ] Complete a disposable real-Docker manual pass for all supported pages and
+      confirm cleanup leaves unrelated Docker resources untouched
+- [ ] Replace the current backend demonstration in `main.go` with the documented
+      Wish/SSH startup path
+
 ## Future nice-to-have: fuller Compose invocation options
 
 - [ ] Support an explicit Compose project name (`-p` / `--project-name`) and use the resolved name for per-project job conflict protection
@@ -126,6 +305,18 @@ documentation is in [`backend/`](backend/README.md), and test procedures are in
 - [ ] Exec into a container terminal
 - [ ] Edit docker compose using nano editor
 
+## Future nice-to-have: SSH access control
+
+- [ ] Add configurable SSH public-key authentication before permitting a
+      non-loopback listen address
+- [ ] Add documented authorized-key management and authentication audit events
+- [ ] Consider explicitly configured password/OIDC integration only if a real
+      deployment requirement appears
+
 ## Future nice-to-have: refresh throughput
 
 - [ ] Replace the single Refresh Manager read worker with a small bounded read-worker pool, while preserving at-most-one active read per refresh key, one queued rerun after an in-flight change, and page-update ordering safety. Keep this pool separate from Command Executor workers so slow reads cannot delay Docker commands.
+
+## Future nice-to-have: Add host resources to the Dashboard page
+- [ ] Add the host-resources to the dashboard page (backend and frontend changes needed)
+

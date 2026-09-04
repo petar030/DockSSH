@@ -165,72 +165,40 @@ go test -tags=integration ./...
 go test -race -tags=integration ./...
 ```
 
-The executable is a temporary manual backend page demo:
+## Manual SSH/TUI verification
+
+Start the real backend and loopback-only SSH server:
 
 ```sh
-# Containers page only, then watch updates for ten seconds.
 go run ./cmd/ssh-docker-tui
-
-# Initial Containers data only.
-go run ./cmd/ssh-docker-tui -watch=0
-
-# Dashboard and Containers.
-go run ./cmd/ssh-docker-tui -page=all
-
-# Exercise an existing container command.
-go run ./cmd/ssh-docker-tui \
-  -container-id=my-container \
-  -container-action=restart \
-  -watch=20s
-
-# List active Compose projects.
-go run ./cmd/ssh-docker-tui -page=compose -watch=0
-
-# Inspect one active Compose project.
-go run ./cmd/ssh-docker-tui \
-  -page=compose \
-  -compose-project=my-project \
-  -compose-file=/srv/compose/my-project/compose.yaml
-
-# Run a long Compose operation and print progress.
-go run ./cmd/ssh-docker-tui \
-  -page=compose \
-  -compose-project=my-project \
-  -compose-file=/srv/compose/my-project/compose.yaml \
-  -compose-action=up
-
-# List local images or inspect one image's history.
-go run ./cmd/ssh-docker-tui -page=images -watch=0
-go run ./cmd/ssh-docker-tui -page=images -image-id=nginx:latest -image-action=history
-
-# Pull an image as a backend-owned job and print progress.
-go run ./cmd/ssh-docker-tui -page=images -image-action=pull -image-reference=alpine:latest
-
-# List volumes or inspect one volume's attached containers.
-go run ./cmd/ssh-docker-tui -page=volumes -watch=0
-go run ./cmd/ssh-docker-tui -page=volumes -volume-name=my-volume -volume-action=attachments
-
-# List networks, inspect IPAM, or show connected containers and addresses.
-go run ./cmd/ssh-docker-tui -page=networks -watch=0
-go run ./cmd/ssh-docker-tui -page=networks -network-id=my-network -network-action=connections
-
-# Show bounded event history, then watch matching live observations.
-go run ./cmd/ssh-docker-tui -page=events -event-resource=container -event-action=start,stop -watch=20s
-
-# Show Docker/host information and detailed disk usage (read-only).
-go run ./cmd/ssh-docker-tui -page=system -watch=0
 ```
 
-Supported manual actions are start, stop, restart, pause, unpause, kill,
-rename and remove. Destructive operations act only on the explicitly selected
-existing resource. Compose actions are start, stop, restart, pause, unpause,
-scale, up, down, pull, build and logs. `up`, `pull`, `build` and `scale` require
-an explicit allowed `-compose-file`. Image actions are details, history, tag,
-remove and pull. Volume actions are details, attachments, create and remove.
-Network actions are details, connections, create, remove, connect and
-disconnect; every mutation requires an explicit target. Events and System
-modes are read-only. Prune is intentionally not exposed by this temporary
-manual executable.
+Connect from a second terminal:
+
+```sh
+ssh -p 23234 localhost
+```
+
+Verify that Dashboard leaves its loading state and displays the real Engine
+identity, resource counts, disk usage and recent Docker-event summary. Then:
+
+1. press `r` and confirm the status reports a manual refresh before a new
+   timestamp appears;
+2. use `[`/`]` and `1`–`8` to verify the persistent frame and explicit
+   placeholders for later page slices;
+3. press `?` to open and close help;
+4. resize below and above 80x24 and confirm the resize message recovers;
+5. connect a second SSH client and confirm navigation/help state is independent
+   while both sessions receive shared Dashboard updates;
+6. create or start a disposable Docker resource and confirm the Dashboard
+   refreshes through the process-wide Docker event listener;
+7. press `q` in one session and confirm the other remains active, then stop the
+   server with `ctrl+c` and confirm remaining sessions disconnect cleanly.
+
+Use `-dashboard-refresh=0` to disable only scheduled Dashboard refreshes, or a
+short interval such as `-dashboard-refresh=2s` when checking the scheduler.
+`-listen` must remain loopback until client authentication is implemented. A
+persistent host key is generated at `.ssh-docker-tui/host_ed25519` by default.
 
 ## Docker configuration
 

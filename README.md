@@ -3,8 +3,9 @@
 A centralized, multi-user terminal application for inspecting and managing a
 local Docker Engine over SSH.
 
-The project is currently establishing its shared, in-process Go backend. The
-architecture and implementation roadmap are documented in
+The project has a shared, in-process Go backend and an SSH-served Bubble Tea
+shell with a working Dashboard page. The architecture and implementation
+roadmap are documented in
 [`docs/plan.md`](docs/plan.md).
 
 ## Requirements
@@ -28,37 +29,35 @@ make test-integration
 ```
 
 See [`docs/testing.md`](docs/testing.md) for the test layout, environment
-configuration, safety rules, and instructions for connecting the future
-production backend to the conformance suite.
+configuration, safety rules, and manual SSH verification instructions.
 
-Until the Wish/Bubble Tea interface is implemented, manually exercise the real
-Dashboard, Containers, Compose, Images, Volumes, Networks, Events, and System
-APIs, command workers, job executor, refresh manager, and Docker event listener
-with:
+## Run the TUI
+
+Start the local SSH server and shared Docker backend:
 
 ```sh
 go run ./cmd/ssh-docker-tui
 ```
 
-For example, list active Compose projects with:
+Then connect from another terminal:
 
 ```sh
-go run ./cmd/ssh-docker-tui -page=compose -watch=0
+ssh -p 23234 localhost
 ```
 
-List local images or volumes with:
+The initial unauthenticated version deliberately accepts only loopback listen
+addresses. It creates and reuses `.ssh-docker-tui/host_ed25519` as the server
+host key. Useful startup options are:
 
 ```sh
-go run ./cmd/ssh-docker-tui -page=images -watch=0
-go run ./cmd/ssh-docker-tui -page=volumes -watch=0
+go run ./cmd/ssh-docker-tui \
+  -listen=127.0.0.1:23234 \
+  -host-key=.ssh-docker-tui/host_ed25519 \
+  -dashboard-refresh=10s
 ```
 
-Inspect networks, bounded/live Docker events, or System information with:
-
-```sh
-go run ./cmd/ssh-docker-tui -page=networks -watch=0
-go run ./cmd/ssh-docker-tui -page=events -watch=10s
-go run ./cmd/ssh-docker-tui -page=system -watch=0
-```
+The Dashboard is implemented. The remaining tabs currently show explicit
+placeholders and will be added page by page. Use `[`/`]` or `1`–`8` to switch
+tabs, `r` to refresh Dashboard, `?` for help, and `q` to disconnect.
 
 The executable entry point is `./cmd/ssh-docker-tui`.

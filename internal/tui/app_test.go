@@ -1,0 +1,135 @@
+package tui
+
+import (
+	"context"
+	"strings"
+	"sync"
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/petar030/ssh-native-docker-tui/internal/backend"
+)
+
+type appBackend struct {
+	mu            sync.Mutex
+	subscriptions []*appSubscription
+}
+
+func (fake *appBackend) RequestRefresh(backend.Page) error { return nil }
+
+func (fake *appBackend) Subscribe(context.Context, backend.Page, backend.EventFilter) (backend.Subscription, error) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	subscription := &appSubscription{events: make(chan backend.EventEnvelope, 1)}
+	fake.subscriptions = append(fake.subscriptions, subscription)
+	return subscription, nil
+}
+
+type appSubscription struct {
+	events chan backend.EventEnvelope
+	once   sync.Once
+}
+
+func (subscription *appSubscription) Events() <-chan backend.EventEnvelope {
+	return subscription.events
+}
+func (subscription *appSubscription) Close() error {
+	subscription.once.Do(func() { close(subscription.events) })
+	return nil
+}
+
+func TestRootRendersPersistentFrameAndPlaceholderPages(t *testing.T) {
+	app := New(context.Background(), &appBackend{})
+	_ = app.Init()
+	_, _ = app.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	dashboardView := app.View().Content
+	for _, value := range []string{"SSH Docker TUI", "Dashboard", "Containers", "Status"} {
+		if value == "Status" {
+			value = "Dashboard"
+		}
+		if !strings.Contains(dashboardView, value) {
+			t.Fatalf("root view missing %q:\n%s", value, dashboardView)
+		}
+	}
+
+	_, _ = app.Update(key("2"))
+	if app.activeTab != 1 || app.dashboard.Active() {
+		t.Fatalf("tab switch did not deactivate Dashboard: tab=%d active=%v", app.activeTab, app.dashboard.Active())
+	}
+	containerView := app.View().Content
+	if !strings.Contains(containerView, "This page is planned for a later TUI slice") ||
+		!strings.Contains(containerView, "SSH Docker TUI") {
+		t.Fatalf("placeholder did not retain shared frame:\n%s", containerView)
+	}
+}
+
+func TestRootDirectAndAdjacentNavigationWraps(t *testing.T) {
+	app := New(context.Background(), &appBackend{})
+	_ = app.Init()
+
+	_, _ = app.Update(key("["))
+	if app.activeTab != len(tabs)-1 {
+		t.Fatalf("previous tab from first = %d, want %d", app.activeTab, len(tabs)-1)
+	}
+	_, _ = app.Update(key("]"))
+	if app.activeTab != 0 || !app.dashboard.Active() {
+		t.Fatalf("next tab did not return to active Dashboard: tab=%d active=%v", app.activeTab, app.dashboard.Active())
+	}
+	_, _ = app.Update(key("6"))
+	if app.activeTab != 5 {
+		t.Fatalf("direct tab = %d, want 5", app.activeTab)
+	}
+}
+
+func TestRootSmallTerminalAndHelp(t *testing.T) {
+	app := New(context.Background(), &appBackend{})
+	_ = app.Init()
+	_, _ = app.Update(tea.WindowSizeMsg{Width: 60, Height: 15})
+	if view := app.View().Content; !strings.Contains(view, "Terminal too small") || !strings.Contains(view, "60x15") {
+		t.Fatalf("small-terminal view:\n%s", view)
+	}
+	_, _ = app.Update(key("?"))
+	if view := app.View().Content; !strings.Contains(view, "KEYBOARD HELP") || !strings.Contains(view, "q / ctrl+c quit") {
+		t.Fatalf("small-terminal help view:\n%s", view)
+	}
+	_, _ = app.Update(key("?"))
+
+	_, _ = app.Update(tea.WindowSizeMsg{Width: 100, Height: 28})
+	_, _ = app.Update(key("?"))
+	if view := app.View().Content; !strings.Contains(view, "KEYBOARD HELP") || !strings.Contains(view, "1–8") {
+		t.Fatalf("help view:\n%s", view)
+	}
+}
+
+func TestRootSessionModelsDoNotShareNavigationState(t *testing.T) {
+	application := &appBackend{}
+	first := New(context.Background(), application)
+	second := New(context.Background(), application)
+	_ = first.Init()
+	_ = second.Init()
+
+	_, _ = first.Update(key("4"))
+	if first.activeTab != 3 || second.activeTab != 0 {
+		t.Fatalf("session tabs leaked: first=%d second=%d", first.activeTab, second.activeTab)
+	}
+}
+
+func TestRootQuitDeactivatesDashboard(t *testing.T) {
+	app := New(context.Background(), &appBackend{})
+	_ = app.Init()
+	_, command := app.Update(key("q"))
+	if app.dashboard.Active() {
+		t.Fatal("Dashboard remained active after quit")
+	}
+	if command == nil {
+		t.Fatal("quit returned no command")
+	}
+	if _, ok := command().(tea.QuitMsg); !ok {
+		t.Fatalf("quit command returned %T", command())
+	}
+}
+
+func key(value string) tea.KeyPressMsg {
+	return tea.KeyPressMsg(tea.Key{Text: value, Code: []rune(value)[0]})
+}

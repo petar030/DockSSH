@@ -19,3 +19,4 @@ coverage.*
 
 # Local runtime data
 /tmp/
+/.ssh-docker-tui/
