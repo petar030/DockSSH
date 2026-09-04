@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
+	backendcontainers "github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 )
 
 type appBackend struct {
@@ -15,7 +16,8 @@ type appBackend struct {
 	subscriptions []*appSubscription
 }
 
-func (fake *appBackend) RequestRefresh(backend.Page) error { return nil }
+func (fake *appBackend) RequestRefresh(backend.Page) error  { return nil }
+func (fake *appBackend) Containers() *backendcontainers.API { return nil }
 
 func (fake *appBackend) Subscribe(context.Context, backend.Page, backend.EventFilter) (backend.Subscription, error) {
 	fake.mu.Lock()
@@ -38,7 +40,7 @@ func (subscription *appSubscription) Close() error {
 	return nil
 }
 
-func TestRootRendersPersistentFrameAndPlaceholderPages(t *testing.T) {
+func TestRootRendersPersistentFrameAndContainersPage(t *testing.T) {
 	app := New(context.Background(), &appBackend{})
 	_ = app.Init()
 	_, _ = app.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
@@ -58,9 +60,9 @@ func TestRootRendersPersistentFrameAndPlaceholderPages(t *testing.T) {
 		t.Fatalf("tab switch did not deactivate Dashboard: tab=%d active=%v", app.activeTab, app.dashboard.Active())
 	}
 	containerView := app.View().Content
-	if !strings.Contains(containerView, "This page is planned for a later TUI slice") ||
+	if !strings.Contains(containerView, "Loading containers") ||
 		!strings.Contains(containerView, "SSH Docker TUI") {
-		t.Fatalf("placeholder did not retain shared frame:\n%s", containerView)
+		t.Fatalf("Containers page did not retain shared frame:\n%s", containerView)
 	}
 }
 
@@ -127,6 +129,23 @@ func TestRootQuitDeactivatesDashboard(t *testing.T) {
 	}
 	if _, ok := command().(tea.QuitMsg); !ok {
 		t.Fatalf("quit command returned %T", command())
+	}
+}
+
+func TestLateDashboardSubscriptionIsClosedAfterTabSwitch(t *testing.T) {
+	application := &appBackend{}
+	app := New(context.Background(), application)
+	command := app.Init()
+	_, _ = app.Update(key("2"))
+	ready := command()
+	_, _ = app.Update(ready)
+	if len(application.subscriptions) == 0 {
+		t.Fatal("Dashboard subscription was not created")
+	}
+	select {
+	case <-application.subscriptions[0].events:
+	default:
+		t.Fatal("late Dashboard subscription was not closed")
 	}
 }
 

@@ -239,10 +239,17 @@ the new lifecycle receives an authoritative update.
 Targeted updates use the same shared page bus. Consequently another SSH
 session can request details for resource B while this session displays resource
 A. The page must check the event's full refresh key and payload identity and
-ignore B; it must also ignore an A response that belongs to an older selection
+ignore B. Local request acknowledgements and streams also carry a selection
 generation. A page requests selected details when that view is opened/focused
 and again after a relevant base update if the selected view is still visible.
 There is no targeted timer and no backend state for "currently selected" data.
+
+The current event contract has no request/selection correlation ID. Therefore
+the full key and payload identity completely reject another selected resource,
+but a rapid A → B → A selection can briefly accept an already-running A read
+after A is selected again. That result is still an authoritative Docker read
+and a newly requested A refresh follows it. Distinguishing the two requests
+would require a future correlation field in the backend event contract.
 
 `SubscriberOverflow` means at least one event for this subscription was lost;
 the subscription itself is still usable. The page marks its data stale and

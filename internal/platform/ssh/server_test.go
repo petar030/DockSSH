@@ -8,11 +8,13 @@ import (
 	"testing"
 
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
+	backendcontainers "github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 )
 
 type testBackend struct{}
 
-func (testBackend) RequestRefresh(backend.Page) error { return nil }
+func (testBackend) RequestRefresh(backend.Page) error  { return nil }
+func (testBackend) Containers() *backendcontainers.API { return nil }
 func (testBackend) Subscribe(context.Context, backend.Page, backend.EventFilter) (backend.Subscription, error) {
 	return testSubscription{events: make(chan backend.EventEnvelope)}, nil
 }

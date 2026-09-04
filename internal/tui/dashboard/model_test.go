@@ -82,18 +82,16 @@ func TestDashboardSubscribesBeforeRefreshAndAppliesSummary(t *testing.T) {
 		t.Fatalf("calls after activation = %v", calls)
 	}
 	model, command := model.Update(ready)
-	messages := runBatch(command)
-	var requested refreshRequestedMsg
-	for _, message := range messages {
-		if value, ok := message.(refreshRequestedMsg); ok {
-			requested = value
-		}
+	batch, ok := command().(tea.BatchMsg)
+	if !ok || len(batch) != 3 {
+		t.Fatalf("subscription command = %#v", command)
 	}
+	requested := batch[1]().(refreshRequestedMsg)
 	if calls := application.recordedCalls(); len(calls) != 2 || calls[1] != "refresh:dashboard" {
 		t.Fatalf("calls after subscription = %v", calls)
 	}
 
-	model, waitCommand := model.Update(requested)
+	model, _ = model.Update(requested)
 	want := backenddashboard.SummaryUpdated{
 		Engine:    backenddashboard.EngineSummary{Available: true, Name: "engine", ServerVersion: "29.1.3"},
 		Resources: backenddashboard.ResourceCounts{Containers: 3, ContainersRunning: 2, Images: 7},
@@ -102,7 +100,7 @@ func TestDashboardSubscribesBeforeRefreshAndAppliesSummary(t *testing.T) {
 	application.subscription.events <- backend.EventEnvelope{
 		Time: now, Reason: backend.RefreshManual, Payload: want,
 	}
-	received := waitCommand().(eventReceivedMsg)
+	received := batch[0]().(eventReceivedMsg)
 	model, _ = model.Update(received)
 
 	if !model.hasData || model.loading || model.stale || model.err != nil {
@@ -244,20 +242,4 @@ func TestDashboardFitsMinimumContentArea(t *testing.T) {
 	if height := lipgloss.Height(view); height > 20 {
 		t.Fatalf("minimum Dashboard height = %d, want <= 20\n%s", height, view)
 	}
-}
-
-func runBatch(command tea.Cmd) []tea.Msg {
-	if command == nil {
-		return nil
-	}
-	message := command()
-	batch, ok := message.(tea.BatchMsg)
-	if !ok {
-		return []tea.Msg{message}
-	}
-	messages := make([]tea.Msg, 0, len(batch))
-	for _, item := range batch {
-		messages = append(messages, item())
-	}
-	return messages
 }

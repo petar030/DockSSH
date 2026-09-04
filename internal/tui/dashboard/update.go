@@ -76,6 +76,7 @@ func (model Model) Update(message tea.Msg) (Model, tea.Cmd) {
 		}
 		model.subscription = message.subscription
 		return model, tea.Batch(
+			waitForEvent(model.subscription, model.generation),
 			requestRefresh(model.backend, model.generation),
 			model.spinner.Tick,
 		)
@@ -89,10 +90,7 @@ func (model Model) Update(message tea.Msg) (Model, tea.Cmd) {
 			model.stale = model.hasData
 			model.err = message.err
 		}
-		if model.subscription == nil {
-			return model, nil
-		}
-		return model, waitForEvent(model.subscription, model.generation)
+		return model, nil
 
 	case eventReceivedMsg:
 		if !model.current(message.generation) {

@@ -16,7 +16,6 @@ import (
 	"charm.land/wish/v2/activeterm"
 	"charm.land/wish/v2/bubbletea"
 	"github.com/petar030/ssh-native-docker-tui/internal/tui"
-	"github.com/petar030/ssh-native-docker-tui/internal/tui/dashboard"
 )
 
 const (
@@ -27,7 +26,7 @@ const (
 type Config struct {
 	Address     string
 	HostKeyPath string
-	Backend     dashboard.Backend
+	Backend     tui.Application
 }
 
 type Server struct {

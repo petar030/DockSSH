@@ -163,29 +163,29 @@ contract and edge cases are specified in [`plan.md`](plan.md#tui-implementation-
 
 ## TUI Slice 2: Containers page
 
-- [ ] Decide whether the documented joined command/refresh error limitation
+- [x] Decide whether the documented joined command/refresh error limitation
       needs a structured backend outcome before finalizing command messaging
-- [ ] Implement the container list, session-local search/state/label filters,
+- [x] Implement the container list, session-local search/state/label filters,
       sorting and identity-based selection
-- [ ] Implement keyed details and processes panels; ignore updates for another
+- [x] Implement keyed details and processes panels; ignore updates for another
       session's selected container and stale selection generations
-- [ ] Show container environment variable names, always mask their values in
-      v1, and render unknown Docker status/health strings safely
-- [ ] Implement start, stop, restart, pause, unpause, kill, rename and remove via
+- [x] Show container environment variable names and values in v1, and render
+      unknown Docker status/health strings safely
+- [x] Implement start, stop, restart, pause, unpause, kill, rename and remove via
       asynchronous Bubble Tea commands and the existing Command Executor API
-- [ ] Add confirmations for kill, remove, force and volume-removal options; map
+- [x] Add confirmations for kill, remove, force and volume-removal options; map
       all stable backend error codes to recoverable UI states
-- [ ] Implement logs with partial-line assembly, terminal sanitization and a
+- [x] Implement logs with partial-line assembly, terminal sanitization and a
       bounded line ring; implement stats with latest-sample storage and bounded
       250–500 ms rendering
-- [ ] Treat stopped-container processes/stats conflicts as targeted-panel
+- [x] Treat stopped-container processes/stats conflicts as targeted-panel
       unavailability rather than whole-page failure
-- [ ] Test command wait cancellation, authoritative post-command updates,
+- [x] Test command wait cancellation, authoritative post-command updates,
       mismatched keyed events, vanished selection, stream closure and overflow
-- [ ] Manually verify all commands, logs and stats on disposable running and
+- [x] Manually verify all commands, logs and stats on disposable running and
       stopped containers without modifying unrelated resources
 
-## TUI Slice 3: Compose page and session job tracking
+## TUI Slice 3: Compose page and session job tracking (Going to be implemented after Slice 8)
 
 - [ ] Add the root/session job tracker before the first job-owning page; keep
       accepted jobs alive and observable across tab changes
@@ -319,4 +319,3 @@ contract and edge cases are specified in [`plan.md`](plan.md#tui-implementation-
 
 ## Future nice-to-have: Add host resources to the Dashboard page
 - [ ] Add the host-resources to the dashboard page (backend and frontend changes needed)
-

@@ -200,6 +200,15 @@ short interval such as `-dashboard-refresh=2s` when checking the scheduler.
 `-listen` must remain loopback until client authentication is implemented. A
 persistent host key is generated at `.ssh-docker-tui/host_ed25519` by default.
 
+For Containers QA, create only an explicitly named and labeled disposable
+container. In the Containers tab verify local filtering/sorting, ID-based
+selection, details, stopped/running processes, logs, stats, action confirmations
+and authoritative post-command updates. Exercise start, stop, restart,
+pause/unpause, rename, kill and remove only on that disposable container. Open
+a second SSH session with another filter/selection to verify that UI state is
+session-local while Docker-backed page updates are shared. Confirm the resource
+is removed after the run; never mutate an unrelated existing container.
+
 ## Docker configuration
 
 The integration fixture follows normal Docker client configuration by default.

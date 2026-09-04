@@ -9,6 +9,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
+	containerstui "github.com/petar030/ssh-native-docker-tui/internal/tui/containers"
 	"github.com/petar030/ssh-native-docker-tui/internal/tui/dashboard"
 	"github.com/petar030/ssh-native-docker-tui/internal/tui/ui"
 )
@@ -21,13 +23,22 @@ type App struct {
 	width  int
 	height int
 
-	activeTab int
-	showHelp  bool
-	dashboard dashboard.Model
+	activeTab  int
+	showHelp   bool
+	dashboard  dashboard.Model
+	containers containerstui.Model
 }
 
-func New(sessionCtx context.Context, application dashboard.Backend) *App {
-	return &App{dashboard: dashboard.New(sessionCtx, application)}
+type Application interface {
+	dashboard.Backend
+	Containers() *containers.API
+}
+
+func New(sessionCtx context.Context, application Application) *App {
+	return &App{
+		dashboard:  dashboard.New(sessionCtx, application),
+		containers: containerstui.New(sessionCtx, application, application.Containers()),
+	}
 }
 
 func (app *App) Init() tea.Cmd {
@@ -45,10 +56,21 @@ func (app *App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return app, nil
 
 	case tea.KeyPressMsg:
+		if message.String() == "ctrl+c" {
+			app.dashboard = app.dashboard.Deactivate()
+			app.containers = app.containers.Deactivate()
+			return app, tea.Quit
+		}
+		if app.activeTab == 1 && app.containers.CapturesInput() {
+			updated, command := app.containers.Update(message)
+			app.containers = updated
+			return app, command
+		}
 		key := message.String()
 		switch key {
-		case "ctrl+c", "q":
+		case "q":
 			app.dashboard = app.dashboard.Deactivate()
+			app.containers = app.containers.Deactivate()
 			return app, tea.Quit
 		case "?":
 			app.showHelp = !app.showHelp
@@ -61,18 +83,39 @@ func (app *App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				app.dashboard, command = app.dashboard.Refresh()
 				return app, command
 			}
+			if app.activeTab == 1 {
+				var command tea.Cmd
+				app.containers, command = app.containers.Refresh()
+				return app, command
+			}
 		}
 		if index, ok := tabFromKey(key); ok {
 			return app.switchTab(index)
 		}
 	}
 
-	if app.activeTab == 0 {
-		updated, command := app.dashboard.Update(message)
-		app.dashboard = updated
-		return app, command
+	if _, isKey := message.(tea.KeyPressMsg); isKey {
+		if app.activeTab == 0 {
+			updated, command := app.dashboard.Update(message)
+			app.dashboard = updated
+			return app, command
+		}
+		if app.activeTab == 1 {
+			updated, command := app.containers.Update(message)
+			app.containers = updated
+			return app, command
+		}
+		return app, nil
 	}
-	return app, nil
+
+	// Background messages are offered to every page model. Their concrete
+	// page-local types ensure only the owner handles them. This also lets an
+	// inactive page close a subscription or stream that finished opening after
+	// the user had already changed tabs.
+	updatedDashboard, dashboardCommand := app.dashboard.Update(message)
+	updatedContainers, containersCommand := app.containers.Update(message)
+	app.dashboard, app.containers = updatedDashboard, updatedContainers
+	return app, tea.Batch(dashboardCommand, containersCommand)
 }
 
 func (app *App) View() tea.View {
@@ -89,6 +132,8 @@ func (app *App) switchTab(index int) (tea.Model, tea.Cmd) {
 	}
 	if app.activeTab == 0 {
 		app.dashboard = app.dashboard.Deactivate()
+	} else if app.activeTab == 1 {
+		app.containers = app.containers.Deactivate()
 	}
 	app.activeTab = index
 	app.showHelp = false
@@ -98,12 +143,20 @@ func (app *App) switchTab(index int) (tea.Model, tea.Cmd) {
 		app.resizeActivePage()
 		return app, command
 	}
+	if app.activeTab == 1 {
+		var command tea.Cmd
+		app.containers, command = app.containers.Activate()
+		app.resizeActivePage()
+		return app, command
+	}
 	return app, nil
 }
 
 func (app *App) resizeActivePage() {
 	if app.activeTab == 0 {
 		app.dashboard = app.dashboard.SetSize(app.width, max(app.height-frameRows, 0))
+	} else if app.activeTab == 1 {
+		app.containers = app.containers.SetSize(app.width, max(app.height-frameRows, 0))
 	}
 }
 
@@ -126,6 +179,9 @@ func (app *App) render() string {
 	body := app.pageContent()
 	status := app.pageStatus()
 	help := "[ ] tabs   1-8 direct   r refresh   ? help   q quit"
+	if app.activeTab == 1 {
+		help = app.containers.Help()
+	}
 	if app.showHelp {
 		body = app.helpView()
 	}
@@ -144,6 +200,9 @@ func (app *App) pageContent() string {
 	if app.activeTab == 0 {
 		return app.dashboard.View()
 	}
+	if app.activeTab == 1 {
+		return app.containers.View()
+	}
 	item := tabs[app.activeTab]
 	return lipgloss.NewStyle().Padding(2, 3).Render(fmt.Sprintf(
 		"%s\n\nThis page is planned for a later TUI slice.\nThe shared layout and navigation are already active.",
@@ -154,6 +213,9 @@ func (app *App) pageContent() string {
 func (app *App) pageStatus() string {
 	if app.activeTab == 0 {
 		return app.dashboard.Status()
+	}
+	if app.activeTab == 1 {
+		return app.containers.Status()
 	}
 	return tabs[app.activeTab].label + " is not implemented yet"
 }
