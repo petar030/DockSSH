@@ -3,11 +3,13 @@ package containers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
 	backendcontainers "github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 )
@@ -69,6 +71,39 @@ func TestStreamMessagesAndCloseRespectGeneration(t *testing.T) {
 	model, _ = model.handleStreamMessage(logValueMsg{generation: 2, streamGen: current, open: true, value: backendcontainers.LogEntry{Data: "late\n"}})
 	if len(model.logLines) != 1 {
 		t.Fatal("late stream value was applied")
+	}
+}
+
+func TestLogsOpenAsScrollableFloatingOverlay(t *testing.T) {
+	model := New(context.Background(), &fakeBackend{}, &fakeAPI{}).SetSize(140, 28)
+	model.active, model.hasData, model.generation, model.pageCtx = true, true, 1, context.Background()
+	model.selectedID = "abc"
+	model.containers = []backendcontainers.Summary{{ID: "abc", Names: []string{"demo"}}}
+	model.detailsID = "abc"
+	model, _ = model.openLogs()
+	if model.overlay != logsOverlay || model.mode != logsView || !model.logFollowing {
+		t.Fatalf("logs did not open as following overlay: overlay=%d mode=%d follow=%v", model.overlay, model.mode, model.logFollowing)
+	}
+	for index := range 60 {
+		model.appendLog(backendcontainers.LogEntry{Source: backendcontainers.LogStdout, Data: fmt.Sprintf("line-%02d\n", index)})
+	}
+	bottom := model.scroll
+	model, _ = model.handleKey(keyPress("k"))
+	if model.scroll != bottom-1 || model.logFollowing {
+		t.Fatalf("k did not scroll away from follow mode: scroll=%d bottom=%d follow=%v", model.scroll, bottom, model.logFollowing)
+	}
+	model.appendLog(backendcontainers.LogEntry{Source: backendcontainers.LogStdout, Data: "new-line\n"})
+	if model.scroll != bottom-1 {
+		t.Fatalf("new log forced a scrolled viewer to bottom: scroll=%d", model.scroll)
+	}
+	view := model.View()
+	for _, want := range []string{"CONTAINERS", "LOGS — demo", "j/k scroll", "PgUp/PgDn", "esc close"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("floating logs missing %q:\n%s", want, view)
+		}
+	}
+	if width, height := lipgloss.Width(view), lipgloss.Height(view); width > 140 || height > 28 {
+		t.Fatalf("floating logs are %dx%d, want at most 140x28", width, height)
 	}
 }
 

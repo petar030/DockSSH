@@ -62,7 +62,9 @@ type statsTickMsg struct {
 func (model Model) openLogs() (Model, tea.Cmd) {
 	model = model.closeStream()
 	model.mode = logsView
+	model.overlay = logsOverlay
 	model.scroll = 0
+	model.logFollowing = true
 	model.streamGen++
 	model.logLines = nil
 	model.logFragments = make(map[backendcontainers.LogSource]string)
@@ -232,10 +234,15 @@ func (model *Model) appendLog(entry backendcontainers.LogEntry) {
 	for _, line := range parts[:len(parts)-1] {
 		model.logLines = append(model.logLines, prefix+ui.SanitizeLine(line))
 	}
-	if len(model.logLines) > maxLogLines {
-		model.logLines = append([]string(nil), model.logLines[len(model.logLines)-maxLogLines:]...)
+	if excess := len(model.logLines) - maxLogLines; excess > 0 {
+		model.logLines = append([]string(nil), model.logLines[excess:]...)
+		if !model.logFollowing {
+			model.scroll = max(model.scroll-excess, 0)
+		}
 	}
-	model.scroll = max(len(model.logLines)-max(model.height-3, 1), 0)
+	if model.logFollowing {
+		model.scroll = model.logMaxScroll()
+	}
 }
 
 func (model *Model) flushLogFragments() {
@@ -272,4 +279,18 @@ func (model *Model) closeStreamPointer() *Model {
 
 func (model Model) currentStream(generation, streamGen uint64, mode viewMode) bool {
 	return model.current(generation) && model.streamGen == streamGen && model.mode == mode
+}
+
+func (model Model) logViewportRows() int {
+	overlayHeight := max(min(model.height-4, 30), 10)
+	return max(overlayHeight-4, 1)
+}
+
+func (model Model) logMaxScroll() int {
+	return max(len(model.logDisplayLines())-model.logViewportRows(), 0)
+}
+
+func (model *Model) scrollLogs(delta int) {
+	model.scroll = max(0, min(model.logMaxScroll(), model.scroll+delta))
+	model.logFollowing = model.scroll == model.logMaxScroll()
 }

@@ -57,6 +57,7 @@ const (
 	filterOverlay
 	renameOverlay
 	confirmOverlay
+	logsOverlay
 )
 
 type sortMode uint8
@@ -102,6 +103,7 @@ type Model struct {
 	sort       sortMode
 	mode       viewMode
 	scroll     int
+	listOffset int
 	overlay    overlayMode
 	renameEdit string
 	confirm    commandKind
@@ -124,6 +126,7 @@ type Model struct {
 	logLines     []string
 	logFragments map[backendcontainers.LogSource]string
 	logErr       error
+	logFollowing bool
 	stats        backendcontainers.StatsSample
 	pendingStats backendcontainers.StatsSample
 	hasStats     bool
@@ -182,6 +185,7 @@ func (model Model) Refresh() (Model, tea.Cmd) {
 func (model Model) SetSize(width, height int) Model {
 	model.width = max(width, 0)
 	model.height = max(height, 0)
+	model.ensureListSelectionVisible()
 	return model
 }
 
@@ -199,6 +203,9 @@ func (model Model) Activity() string {
 }
 
 func (model Model) Help() string {
+	if model.overlay == logsOverlay {
+		return "j/k Scroll │ PgUp/PgDn Page │ g Top │ G Bottom/follow │ esc Close logs"
+	}
 	if model.overlay != noOverlay {
 		return "enter confirm/apply   esc cancel   ctrl+c quit"
 	}

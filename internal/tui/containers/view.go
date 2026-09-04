@@ -11,31 +11,38 @@ import (
 )
 
 func (model Model) View() string {
+	page := model
+	if model.overlay == logsOverlay {
+		page.mode = detailsView
+	}
 	var content string
-	if !model.hasData {
-		content = model.spinner.View() + " Loading containers…"
-		if model.err != nil {
-			content = "Containers unavailable\n\n" + ui.ErrorNotice(model.err.Error(), max(model.width-6, 1)) + "\n\nPress r to retry."
+	if !page.hasData {
+		content = page.spinner.View() + " Loading containers…"
+		if page.err != nil {
+			content = "Containers unavailable\n\n" + ui.ErrorNotice(page.err.Error(), max(page.width-6, 1)) + "\n\nPress r to retry."
 		}
 		content = lipgloss.NewStyle().Padding(2, 3).Render(content)
-	} else if model.width >= 110 {
-		left := model.listPanel(max(model.width*2/3, 70))
-		rightWidth := max(model.width-lipgloss.Width(left)-1, 36)
-		right := model.secondaryPanel(rightWidth)
+	} else if page.width >= 110 {
+		left := page.listPanel(max(page.width*2/3, 70), page.height)
+		rightWidth := max(page.width-lipgloss.Width(left)-1, 36)
+		right := page.secondaryPanel(rightWidth)
 		content = lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 	} else {
-		listHeight := max(model.height/2, 8)
-		list := fitView(model.listPanel(max(model.width, 1)), model.width, listHeight)
-		secondary := model.secondaryPanel(max(model.width, 1))
+		listHeight := max(page.height/2, 8)
+		list := fitView(page.listPanel(max(page.width, 1), listHeight), page.width, listHeight)
+		secondary := page.secondaryPanel(max(page.width, 1))
 		content = lipgloss.JoinVertical(lipgloss.Left, list, secondary)
 	}
 	if model.overlay != noOverlay {
-		content = model.overlayView()
+		content = ui.OverlayCentered(
+			fitView(content, model.width, model.height),
+			model.overlayView(), model.width, model.height,
+		)
 	}
 	return fitView(content, model.width, model.height)
 }
 
-func (model Model) listPanel(width int) string {
+func (model Model) listPanel(width, height int) string {
 	visible := model.visible()
 	inner := max(width-4, 1)
 	nameWidth := max(inner*17/100, 10)
@@ -61,12 +68,23 @@ func (model Model) listPanel(width int) string {
 	if len(visible) == 0 {
 		rows = append(rows, "", "No containers match the current filter.")
 	} else {
-		limit := max(model.height-8, 1)
-		for index, value := range visible {
-			if index >= limit {
-				rows = append(rows, fmt.Sprintf("… %d more", len(visible)-index))
+		capacity := max(height-6, 1)
+		if model.feedback() != "" {
+			capacity = max(capacity-2, 1)
+		}
+		offset := max(0, min(model.listOffset, max(len(visible)-capacity, 0)))
+		for index := range visible {
+			if visible[index].ID == model.selectedID {
+				if index < offset {
+					offset = index
+				} else if index >= offset+capacity {
+					offset = index - capacity + 1
+				}
 				break
 			}
+		}
+		end := min(offset+capacity, len(visible))
+		for _, value := range visible[offset:end] {
 			marker := stateMarker(value.State)
 			if value.ID == model.selectedID {
 				marker = ">"
@@ -90,7 +108,21 @@ func (model Model) listPanel(width int) string {
 		}
 	}
 	title := "▣  CONTAINERS"
-	count := fmt.Sprintf("%d shown / %d total", len(visible), len(model.containers))
+	start, end := 0, 0
+	if len(visible) > 0 {
+		capacity := max(height-6, 1)
+		if model.feedback() != "" {
+			capacity = max(capacity-2, 1)
+		}
+		offset := max(0, min(model.listOffset, max(len(visible)-capacity, 0)))
+		for index := range visible {
+			if visible[index].ID == model.selectedID && index >= offset+capacity {
+				offset = index - capacity + 1
+			}
+		}
+		start, end = offset+1, min(offset+capacity, len(visible))
+	}
+	count := fmt.Sprintf("%d–%d / %d", start, end, len(visible))
 	header := title + strings.Repeat(" ", max(inner-lipgloss.Width(title)-lipgloss.Width(count), 1)) + count
 	return pagePanel(header, strings.Join(rows, "\n"), width)
 }
@@ -197,6 +229,11 @@ func (model Model) processesPanel(width int) string {
 }
 
 func (model Model) logsPanel(width int) string {
+	lines := model.logDisplayLines()
+	return pagePanel("LOGS — "+shortID(model.selectedID), model.windowBody(strings.Join(lines, "\n")), width)
+}
+
+func (model Model) logDisplayLines() []string {
 	lines := append([]string(nil), model.logLines...)
 	for _, source := range []backendcontainers.LogSource{backendcontainers.LogStdout, backendcontainers.LogStderr} {
 		if fragment := model.logFragments[source]; fragment != "" {
@@ -207,9 +244,26 @@ func (model Model) logsPanel(width int) string {
 		lines = []string{"Waiting for log output…"}
 	}
 	if model.logErr != nil {
-		lines = append(lines, "", ui.ErrorNotice("Stream ended: "+model.logErr.Error(), max(width-4, 1)))
+		lines = append(lines, "", "Stream ended: "+safe(model.logErr.Error()))
 	}
-	return pagePanel("LOGS — "+shortID(model.selectedID), model.windowBody(strings.Join(lines, "\n")), width)
+	return lines
+}
+
+func (model Model) logsOverlayView() string {
+	width := max(min(model.width-10, 120), 40)
+	viewportRows := model.logViewportRows()
+	lines := model.logDisplayLines()
+	maximum := max(len(lines)-viewportRows, 0)
+	start := min(max(model.scroll, 0), maximum)
+	end := min(start+viewportRows, len(lines))
+	visible := append([]string(nil), lines[start:end]...)
+	for len(visible) < viewportRows {
+		visible = append(visible, "")
+	}
+	position := fmt.Sprintf("%d–%d / %d", min(start+1, len(lines)), end, len(lines))
+	hint := "j/k scroll   PgUp/PgDn page   g top   G bottom/follow   esc close"
+	body := strings.Join(visible, "\n") + "\n" + cell(hint, max(width-4-lipgloss.Width(position)-2, 1)) + "  " + position
+	return pagePanel("▤  LOGS — "+safe(model.selectedName()), body, width)
 }
 
 func (model Model) statsPanel(width int) string {
@@ -249,6 +303,8 @@ func (model Model) overlayView() string {
 		}
 		lines = append(lines, "", "y/enter confirm   n/esc cancel")
 		return pagePanel("CONFIRM "+strings.ToUpper(string(model.confirm)), strings.Join(lines, "\n"), max(min(model.width, 66), 1))
+	case logsOverlay:
+		return model.logsOverlayView()
 	}
 	return ""
 }

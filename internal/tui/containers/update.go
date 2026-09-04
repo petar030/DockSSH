@@ -188,6 +188,7 @@ func (model Model) handleEvent(event backend.EventEnvelope) (Model, tea.Cmd) {
 			model.clearSelection()
 		}
 		model.ensureVisibleSelection()
+		model.ensureListSelectionVisible()
 		if model.selectedID != "" && model.mode == detailsView && model.detailsID != model.selectedID {
 			model.detailsState = panelState{loading: true}
 		}
@@ -219,6 +220,29 @@ func (model Model) handleEvent(event backend.EventEnvelope) (Model, tea.Cmd) {
 
 func (model Model) handleKey(message tea.KeyPressMsg) (Model, tea.Cmd) {
 	key := message.String()
+	if model.overlay == logsOverlay {
+		switch key {
+		case "up", "k":
+			model.scrollLogs(-1)
+		case "down", "j":
+			model.scrollLogs(1)
+		case "pgup":
+			model.scrollLogs(-model.logViewportRows())
+		case "pgdown":
+			model.scrollLogs(model.logViewportRows())
+		case "g":
+			model.scroll = 0
+			model.logFollowing = false
+		case "G":
+			model.scroll = model.logMaxScroll()
+			model.logFollowing = true
+		case "esc", "l":
+			model = model.closeStream()
+			model.mode = detailsView
+			model.overlay = noOverlay
+		}
+		return model, nil
+	}
 	if model.overlay == filterOverlay || model.overlay == renameOverlay {
 		return model.handleEditorKey(message)
 	}
@@ -467,6 +491,7 @@ func (model *Model) moveSelection(delta int) {
 		model.detailsState, model.processState = panelState{}, panelState{}
 		model = model.closeStreamPointer()
 	}
+	model.ensureListSelectionVisible()
 }
 
 func (model *Model) ensureVisibleSelection() {
@@ -480,6 +505,7 @@ func (model *Model) ensureVisibleSelection() {
 	if len(visible) > 0 {
 		model.selectedID = visible[0].ID
 	}
+	model.ensureListSelectionVisible()
 }
 
 func (model Model) selectionExists() bool {
@@ -497,11 +523,45 @@ func (model Model) selectionExists() bool {
 func (model *Model) clearSelection() {
 	model.closeStreamPointer()
 	model.selectedID = ""
+	model.listOffset = 0
 	model.selectionGen++
 	model.mode = detailsView
 	model.details, model.detailsID = backendcontainers.Details{}, ""
 	model.processes = backendcontainers.ProcessesUpdated{}
 	model.detailsState, model.processState = panelState{}, panelState{}
+}
+
+func (model Model) listViewportRows() int {
+	height := model.height
+	if model.width < 110 {
+		height = max(height/2, 8)
+	}
+	overhead := 6
+	if model.feedback() != "" {
+		overhead += 2
+	}
+	return max(height-overhead, 1)
+}
+
+func (model *Model) ensureListSelectionVisible() {
+	visible := model.visible()
+	capacity := model.listViewportRows()
+	maximum := max(len(visible)-capacity, 0)
+	model.listOffset = max(0, min(model.listOffset, maximum))
+	if model.selectedID == "" {
+		return
+	}
+	for index := range visible {
+		if visible[index].ID != model.selectedID {
+			continue
+		}
+		if index < model.listOffset {
+			model.listOffset = index
+		} else if index >= model.listOffset+capacity {
+			model.listOffset = index - capacity + 1
+		}
+		return
+	}
 }
 
 func (model Model) selectedSummary() backendcontainers.Summary {

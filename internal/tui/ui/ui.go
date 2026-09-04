@@ -64,6 +64,40 @@ func notice(symbol, value string, width int, style lipgloss.Style) string {
 	return style.Render(Truncate(value, width))
 }
 
+// OverlayCentered draws foreground over background without changing the
+// surrounding page. Both inputs may contain ANSI styling.
+func OverlayCentered(background, foreground string, width, height int) string {
+	if width <= 0 || height <= 0 {
+		return ""
+	}
+	backgroundLines := strings.Split(background, "\n")
+	foregroundLines := strings.Split(foreground, "\n")
+	foregroundWidth := min(lipgloss.Width(foreground), width)
+	foregroundHeight := min(len(foregroundLines), height)
+	left := max((width-foregroundWidth)/2, 0)
+	top := max((height-foregroundHeight)/2, 0)
+
+	result := make([]string, height)
+	for row := range height {
+		backgroundLine := ""
+		if row < len(backgroundLines) {
+			backgroundLine = Truncate(backgroundLines[row], width)
+		}
+		backgroundLine += strings.Repeat(" ", max(width-lipgloss.Width(backgroundLine), 0))
+		if row < top || row >= top+foregroundHeight {
+			result[row] = backgroundLine
+			continue
+		}
+
+		foregroundLine := Truncate(foregroundLines[row-top], foregroundWidth)
+		foregroundLine += strings.Repeat(" ", max(foregroundWidth-lipgloss.Width(foregroundLine), 0))
+		prefix := ansi.Cut(backgroundLine, 0, left)
+		suffix := ansi.Cut(backgroundLine, left+foregroundWidth, width)
+		result[row] = prefix + foregroundLine + suffix
+	}
+	return strings.Join(result, "\n")
+}
+
 func FormatBytes(value int64) string {
 	const unit = int64(1024)
 	if value < unit {
