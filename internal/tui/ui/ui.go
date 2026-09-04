@@ -17,12 +17,12 @@ const (
 )
 
 var (
-	Primary = lipgloss.Color("#7D9CFF")
-	Muted   = lipgloss.Color("#7C8496")
-	Success = lipgloss.Color("#7BD88F")
-	Warning = lipgloss.Color("#F2C66D")
-	Danger  = lipgloss.Color("#FF7A90")
-	Border  = lipgloss.Color("#485267")
+	Primary = lipgloss.Color("#249DFF")
+	Muted   = lipgloss.Color("#A7AFBA")
+	Success = lipgloss.Color("#20D65A")
+	Warning = lipgloss.Color("#FFD21F")
+	Danger  = lipgloss.Color("#FF4D4D")
+	Border  = lipgloss.Color("#168BFF")
 )
 
 // SanitizeLine makes Docker-controlled text safe to render on one terminal

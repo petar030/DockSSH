@@ -508,13 +508,18 @@ disposable Docker fixture.
 The initial full layout targets terminals of at least 80 columns by 24 rows.
 Smaller terminals show a resize message and only the quit/help controls. The
 root layout uses one title/connection row, one horizontal tab row, the remaining
-space for page content, and two footer rows for status and contextual help.
+space for page content, and two bordered footer content rows: page controls
+with status, followed by unified application controls.
 
-At 120 columns and wider, list/detail pages use a roughly 40/60 horizontal
-split. Between 80 and 119 columns they show one primary panel at a time and use
-`enter`/`esc` to move between list and details. Dashboard cards use two columns
-when they fit and one column otherwise. Modals are centered within the content
-area and never exceed the terminal bounds.
+At 120 columns and wider, list/detail pages use a roughly 2/3–1/3 horizontal
+workspace: the resource list stays visible on the left, while selected-resource
+details remain visible on the right. Selection immediately
+requests its keyed details; opening a separate details screen is not required.
+Logs, stats and similar focused data replace the right-hand details panel rather
+than replacing the whole page. Between 80 and 119 columns the same regions stack
+vertically, keeping the list and selected information visible. Dashboard cards use three
+columns when space permits and two columns at narrower supported sizes. Only text
+entry and destructive confirmation use bounded overlays.
 
 The initial global key map is deliberately small and may evolve with the page
 implementations:
@@ -524,19 +529,19 @@ implementations:
 | `[` / `]`, `1`–`8` | Previous/next tab or direct tab selection |
 | `up`/`down`, `j`/`k` | Move within the focused list |
 | `tab` / `shift+tab` | Move focus between visible panels or form fields |
-| `enter` | Open details, accept a non-destructive choice, or activate focus |
-| `esc` | Close/back/cancel the current view or modal |
+| `enter` | Accept the current editor or confirmation; page use may be added when useful |
+| `esc` | Return a focused right panel to details, or cancel the current modal |
 | `f` | Focus the current page's find/filter input |
 | `r` | Request the active page's authoritative refresh |
-| `a` | Open the selected resource's actions menu where one exists |
 | `?` | Toggle contextual help |
 | `q` | Quit from normal navigation mode |
 | `ctrl+c` | End the TUI session from any mode |
 
 Text editors and confirmation dialogs consume ordinary character keys before
-global navigation. Every page footer displays only currently valid bindings;
-page-specific shortcuts are introduced with that page rather than reserved in
-advance.
+global navigation. The bottom row always shows global navigation. A separate
+row shows page navigation and direct resource commands. Pages do not hide
+ordinary commands behind an Actions view or duplicate them in a content panel;
+destructive commands still require confirmation.
 
 ### Resolved TUI/SSH product decisions
 

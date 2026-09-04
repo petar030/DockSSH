@@ -137,15 +137,67 @@ func TestActivationSubscribesBeforeRefreshAndAppliesList(t *testing.T) {
 	}
 
 	now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
-	model, _ = model.Update(eventReceivedMsg{generation: model.generation, open: true, event: backend.EventEnvelope{
+	model, detailCommand := model.Update(eventReceivedMsg{generation: model.generation, open: true, event: backend.EventEnvelope{
 		Time: now, Key: backend.RefreshKey{Kind: backendcontainers.RefreshKindList},
 		Payload: backendcontainers.ListUpdated{Containers: []backendcontainers.Summary{{ID: "b", Names: []string{"beta"}}, {ID: "a", Names: []string{"alpha"}}}},
 	}})
 	if !model.hasData || model.loading || model.selectedID != "a" || model.updatedAt != now {
 		t.Fatalf("list state not applied: %#v", model)
 	}
+	if detailCommand == nil {
+		t.Fatal("initial selection did not automatically request details")
+	}
+	detailCommands := batchCommands(detailCommand)
+	if len(detailCommands) != 2 {
+		t.Fatalf("detail update returned %d commands", len(detailCommands))
+	}
+	_ = detailCommands[1]()
+	if len(api.requests) != 1 || api.requests[0].ID != "a" || api.requests[0].Kind != backendcontainers.RefreshKindDetails {
+		t.Fatalf("automatic detail requests = %#v", api.requests)
+	}
 	if view := model.SetSize(100, 20).View(); !strings.Contains(view, "alpha") || !strings.Contains(view, "beta") {
 		t.Fatalf("list view missing containers:\n%s", view)
+	}
+}
+
+func TestSelectionLoadsDetailsAndQuickActionsAreInline(t *testing.T) {
+	api := &fakeAPI{}
+	model := New(context.Background(), &fakeBackend{}, api).SetSize(140, 28)
+	model.active, model.generation, model.hasData = true, 1, true
+	model.containers = []backendcontainers.Summary{{ID: "a", Names: []string{"alpha"}}, {ID: "b", Names: []string{"beta"}}}
+	model.selectedID, model.detailsID = "a", "a"
+
+	model, command := model.handleKey(keyPress("down"))
+	if model.selectedID != "b" || command == nil {
+		t.Fatalf("selection did not request new details: selected=%q command=%v", model.selectedID, command)
+	}
+	_ = command()
+	if len(api.requests) != 1 || api.requests[0].ID != "b" {
+		t.Fatalf("selection detail requests = %#v", api.requests)
+	}
+	view := model.View()
+	for _, want := range []string{"CONTAINERS", "CONTAINER DETAILS", "STATE", "HEALTH", "PORTS", "PROJECT"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("workspace missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestContainerWorkspaceShowsOperationalColumnsAndComposeIdentity(t *testing.T) {
+	model := New(context.Background(), &fakeBackend{}, &fakeAPI{}).SetSize(170, 30)
+	model.active, model.hasData, model.selectedID, model.detailsID = true, true, "abc", "abc"
+	model.containers = []backendcontainers.Summary{{
+		ID: "abc", Names: []string{"web-1"}, Image: "nginx:alpine", State: "running", Health: "healthy",
+		Ports:  []backendcontainers.Port{{IP: "0.0.0.0", PublicPort: 8080, PrivatePort: 80, Protocol: "tcp"}},
+		Labels: map[string]string{"com.docker.compose.project": "website", "com.docker.compose.service": "web"},
+	}}
+	model.details = backendcontainers.Details{ID: "abc", Name: "web-1", Image: "nginx:alpine", State: backendcontainers.State{Status: "running", Health: "healthy"}}
+
+	view := model.View()
+	for _, want := range []string{"web-1", "nginx:alpine", "running", "healthy", "8080→80/tcp", "website", "Service:", "web"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("container workspace missing %q:\n%s", want, view)
+		}
 	}
 }
 
@@ -164,7 +216,7 @@ func TestSelectionFiltersAndVanishedContainer(t *testing.T) {
 	}
 	model.mode, model.detailsID = detailsView, "2"
 	model, _ = model.handleEvent(backend.EventEnvelope{Payload: backendcontainers.ListUpdated{Containers: []backendcontainers.Summary{{ID: "1", Names: []string{"web"}}}}})
-	if model.selectedID != "" || model.mode != listView || model.detailsID != "" {
+	if model.selectedID != "" || model.mode != detailsView || model.detailsID != "" {
 		t.Fatalf("vanished selection remained: selected=%q mode=%d details=%q", model.selectedID, model.mode, model.detailsID)
 	}
 }
@@ -268,7 +320,7 @@ func TestLeavingPageCancelsCommandWaitAndRejectsItsLateMessage(t *testing.T) {
 }
 
 func TestDetailsRenderEnvironmentValuesSafelyAndFit(t *testing.T) {
-	model := New(context.Background(), &fakeBackend{}, &fakeAPI{}).SetSize(80, 20)
+	model := New(context.Background(), &fakeBackend{}, &fakeAPI{}).SetSize(160, 30)
 	model.active, model.hasData, model.selectedID, model.mode = true, true, "abc", detailsView
 	model.containers = []backendcontainers.Summary{{ID: "abc", Names: []string{"demo"}}}
 	model.detailsID = "abc"
@@ -280,8 +332,8 @@ func TestDetailsRenderEnvironmentValuesSafelyAndFit(t *testing.T) {
 	if !strings.Contains(view, "TOKEN=visible-value") || strings.Contains(view, "\x1b[2J") {
 		t.Fatalf("environment rendering is incorrect:\n%s", view)
 	}
-	if lines := strings.Count(view, "\n") + 1; lines > 20 {
-		t.Fatalf("view height = %d, want <= 20", lines)
+	if lines := strings.Count(view, "\n") + 1; lines > 30 {
+		t.Fatalf("view height = %d, want <= 30", lines)
 	}
 }
 
@@ -330,4 +382,11 @@ func boolText(value bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+func keyPress(value string) tea.KeyPressMsg {
+	if value == "down" {
+		return tea.KeyPressMsg(tea.Key{Code: tea.KeyDown})
+	}
+	return tea.KeyPressMsg(tea.Key{Text: value, Code: []rune(value)[0]})
 }

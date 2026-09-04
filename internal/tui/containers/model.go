@@ -44,8 +44,7 @@ type API interface {
 type viewMode uint8
 
 const (
-	listView viewMode = iota
-	detailsView
+	detailsView viewMode = iota
 	processesView
 	logsView
 	statsView
@@ -56,7 +55,6 @@ type overlayMode uint8
 const (
 	noOverlay overlayMode = iota
 	filterOverlay
-	actionsOverlay
 	renameOverlay
 	confirmOverlay
 )
@@ -105,7 +103,6 @@ type Model struct {
 	mode       viewMode
 	scroll     int
 	overlay    overlayMode
-	action     int
 	renameEdit string
 	confirm    commandKind
 	force      bool
@@ -193,16 +190,7 @@ func (model Model) Help() string {
 	if model.overlay != noOverlay {
 		return "enter confirm/apply   esc cancel   ctrl+c quit"
 	}
-	switch model.mode {
-	case listView:
-		return "↑↓ select  enter details  p processes  l logs  s stats  a actions  f filter  o sort"
-	case detailsView:
-		return "↑↓ scroll  p processes  l logs  s stats  a actions  esc list"
-	case processesView, logsView, statsView:
-		return "↑↓ scroll  enter details  a actions  esc list"
-	default:
-		return "esc list"
-	}
+	return "↑↓ Move │ f Find │ l Logs │ t Stats │ P Proc │ s Start │ x Stop │ R Restart │ p Pause │ K Kill │ n Rename │ d Remove"
 }
 
 func (model Model) Status() string {

@@ -19,16 +19,20 @@ func (model Model) View() string {
 
 	contentWidth := max(model.width, ui.MinimumWidth)
 	gap := 1
-	columnWidth := max((contentWidth-gap)/2, 24)
-
-	engine := model.enginePanel(columnWidth)
-	resources := model.resourcesPanel(columnWidth)
-	disk := model.diskPanel(columnWidth)
-	recent := model.recentPanel(columnWidth)
-
-	firstRow := lipgloss.JoinHorizontal(lipgloss.Top, engine, strings.Repeat(" ", gap), resources)
-	secondRow := lipgloss.JoinHorizontal(lipgloss.Top, disk, strings.Repeat(" ", gap), recent)
-	content := lipgloss.JoinVertical(lipgloss.Left, firstRow, secondRow)
+	var content string
+	if contentWidth >= 120 {
+		columnWidth := max((contentWidth-2*gap)/3, 24)
+		firstRow := lipgloss.JoinHorizontal(lipgloss.Top,
+			model.enginePanel(columnWidth), strings.Repeat(" ", gap),
+			model.resourcesPanel(columnWidth), strings.Repeat(" ", gap),
+			model.diskPanel(contentWidth-2*columnWidth-2*gap))
+		content = lipgloss.JoinVertical(lipgloss.Left, firstRow, model.recentPanel(contentWidth))
+	} else {
+		columnWidth := max((contentWidth-gap)/2, 24)
+		firstRow := lipgloss.JoinHorizontal(lipgloss.Top, model.enginePanel(columnWidth), strings.Repeat(" ", gap), model.resourcesPanel(columnWidth))
+		secondRow := lipgloss.JoinHorizontal(lipgloss.Top, model.diskPanel(columnWidth), strings.Repeat(" ", gap), model.recentPanel(columnWidth))
+		content = lipgloss.JoinVertical(lipgloss.Left, firstRow, secondRow)
+	}
 
 	if model.stale || model.loading {
 		state := model.spinner.View() + " refreshing"

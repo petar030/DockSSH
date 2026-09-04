@@ -167,12 +167,16 @@ contract and edge cases are specified in [`plan.md`](plan.md#tui-implementation-
       needs a structured backend outcome before finalizing command messaging
 - [x] Implement the container list, session-local search/state/label filters,
       sorting and identity-based selection
+- [x] Keep the list and selected details in one responsive
+      workspace; request details immediately whenever selection changes
 - [x] Implement keyed details and processes panels; ignore updates for another
       session's selected container and stale selection generations
 - [x] Show container environment variable names and values in v1, and render
       unknown Docker status/health strings safely
 - [x] Implement start, stop, restart, pause, unpause, kill, rename and remove via
       asynchronous Bubble Tea commands and the existing Command Executor API
+- [x] Expose ordinary container commands in the page-specific footer rather
+      than a separate Actions view or duplicate content panel
 - [x] Add confirmations for kill, remove, force and volume-removal options; map
       all stable backend error codes to recoverable UI states
 - [x] Implement logs with partial-line assembly, terminal sanitization and a

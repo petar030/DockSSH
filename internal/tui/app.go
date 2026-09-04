@@ -15,7 +15,7 @@ import (
 	"github.com/petar030/ssh-native-docker-tui/internal/tui/ui"
 )
 
-const frameRows = 4
+const frameRows = 9
 
 // App is one SSH session's root model. It owns the persistent frame; page
 // packages own everything rendered inside the content area.
@@ -178,10 +178,11 @@ func (app *App) render() string {
 
 	body := app.pageContent()
 	status := app.pageStatus()
-	help := "[ ] tabs   1-8 direct   r refresh   ? help   q quit"
+	pageHelp := ""
 	if app.activeTab == 1 {
-		help = app.containers.Help()
+		pageHelp = app.containers.Help()
 	}
+	globalHelp := "[ / ] switch tab   1-8 open page   r refresh   ? help   q quit"
 	if app.showHelp {
 		body = app.helpView()
 	}
@@ -189,10 +190,9 @@ func (app *App) render() string {
 	contentHeight := app.height - frameRows
 	body = lipgloss.NewStyle().Width(app.width).Height(contentHeight).Render(body)
 	return strings.Join([]string{
-		renderTopBar(app.width, connection),
-		renderTabs(app.width, app.activeTab),
+		renderHeader(app.width, app.activeTab, connection),
 		body,
-		renderFooter(app.width, status, help),
+		renderFooter(app.width, status, pageHelp, globalHelp),
 	}, "\n")
 }
 

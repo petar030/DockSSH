@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
 	backendcontainers "github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 )
@@ -46,7 +47,10 @@ func TestRootRendersPersistentFrameAndContainersPage(t *testing.T) {
 	_, _ = app.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 
 	dashboardView := app.View().Content
-	for _, value := range []string{"SSH Docker TUI", "Dashboard", "Containers", "Status"} {
+	if width, height := lipgloss.Width(dashboardView), lipgloss.Height(dashboardView); width > 120 || height > 30 {
+		t.Fatalf("root frame is %dx%d, want at most 120x30", width, height)
+	}
+	for _, value := range []string{"DOCKER TUI", "Dashboard", "Containers", "Status"} {
 		if value == "Status" {
 			value = "Dashboard"
 		}
@@ -61,7 +65,8 @@ func TestRootRendersPersistentFrameAndContainersPage(t *testing.T) {
 	}
 	containerView := app.View().Content
 	if !strings.Contains(containerView, "Loading containers") ||
-		!strings.Contains(containerView, "SSH Docker TUI") {
+		!strings.Contains(containerView, "DOCKER TUI") ||
+		!strings.Contains(containerView, "1-8 open page") {
 		t.Fatalf("Containers page did not retain shared frame:\n%s", containerView)
 	}
 }

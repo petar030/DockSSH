@@ -9,10 +9,23 @@ import (
 )
 
 func renderTopBar(width int, connection string) string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(ui.Primary).Render("SSH Docker TUI")
+	title := lipgloss.NewStyle().Bold(true).Foreground(ui.Primary).Render("◆  DOCKER TUI")
 	status := lipgloss.NewStyle().Foreground(ui.Muted).Render(connection)
 	gap := max(width-lipgloss.Width(title)-lipgloss.Width(status), 1)
 	return ui.Truncate(title+strings.Repeat(" ", gap)+status, width)
+}
+
+func renderHeader(width, active int, connection string) string {
+	contentWidth := max(width-4, 1)
+	body := padHeaderLine(renderTopBar(contentWidth, connection), contentWidth) + "\n" +
+		padHeaderLine(renderTabs(contentWidth, active), contentWidth)
+	return lipgloss.NewStyle().Padding(0, 1).
+		Border(lipgloss.RoundedBorder()).BorderForeground(ui.Border).Render(body)
+}
+
+func padHeaderLine(value string, width int) string {
+	value = ui.Truncate(value, width)
+	return value + strings.Repeat(" ", max(width-lipgloss.Width(value), 0))
 }
 
 func renderTabs(width, active int) string {
@@ -21,18 +34,26 @@ func renderTabs(width, active int) string {
 		label := " " + item.label + " "
 		style := lipgloss.NewStyle().Foreground(ui.Muted)
 		if index == active {
-			style = style.Bold(true).Foreground(ui.Primary).Underline(true)
+			style = style.Bold(true).Foreground(lipgloss.Color("#EAF6FF")).Background(lipgloss.Color("#10365C"))
 		}
 		values = append(values, style.Render(label))
 	}
 	return ui.Truncate(strings.Join(values, "│"), width)
 }
 
-func renderFooter(width int, status, help string) string {
-	status = ui.Truncate(ui.SanitizeLine(status), width)
-	help = ui.Truncate(help, width)
-	return lipgloss.NewStyle().Foreground(ui.Muted).Render(status) + "\n" +
-		lipgloss.NewStyle().Foreground(ui.Muted).Render(help)
+func renderFooter(width int, status, pageHelp, globalHelp string) string {
+	inner := max(width-4, 1)
+	pageHelp = ui.Truncate(pageHelp, inner)
+	if pageHelp == "" {
+		pageHelp = ui.Truncate(ui.SanitizeLine(status), inner)
+	} else {
+		pageHelp = ui.Truncate(pageHelp+"   │   "+ui.SanitizeLine(status), inner)
+	}
+	globalHelp = ui.Truncate(globalHelp, inner)
+	body := lipgloss.NewStyle().Foreground(ui.Primary).Render(pageHelp) + "\n" +
+		lipgloss.NewStyle().Foreground(ui.Muted).Render(globalHelp)
+	return lipgloss.NewStyle().Width(max(width-2, 1)).Padding(0, 1).
+		Border(lipgloss.RoundedBorder()).BorderForeground(ui.Border).Render(body)
 }
 
 func renderTooSmall(width, height int) string {

@@ -18,14 +18,16 @@ func (model Model) View() string {
 			content = "Containers unavailable\n\n" + ui.SanitizeLine(model.err.Error()) + "\n\nPress r to retry."
 		}
 		content = lipgloss.NewStyle().Padding(2, 3).Render(content)
-	} else if model.width >= 120 && model.mode != logsView && model.mode != statsView {
-		left := model.listPanel(max(model.width*2/5, 42))
-		right := model.secondaryPanel(max(model.width-lipgloss.Width(left)-1, 40))
+	} else if model.width >= 110 {
+		left := model.listPanel(max(model.width*2/3, 70))
+		rightWidth := max(model.width-lipgloss.Width(left)-1, 36)
+		right := model.secondaryPanel(rightWidth)
 		content = lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
-	} else if model.mode == listView {
-		content = model.listPanel(max(model.width, 1))
 	} else {
-		content = model.secondaryPanel(max(model.width, 1))
+		listHeight := max(model.height/2, 8)
+		list := fitView(model.listPanel(max(model.width, 1)), model.width, listHeight)
+		secondary := model.secondaryPanel(max(model.width, 1))
+		content = lipgloss.JoinVertical(lipgloss.Left, list, secondary)
 	}
 	if model.overlay != noOverlay {
 		content = model.overlayView()
@@ -35,31 +37,57 @@ func (model Model) View() string {
 
 func (model Model) listPanel(width int) string {
 	visible := model.visible()
-	rows := []string{"NAME             ID            IMAGE                 STATE / STATUS"}
+	inner := max(width-4, 1)
+	nameWidth := max(inner*17/100, 10)
+	imageWidth := max(inner*21/100, 12)
+	stateWidth := 10
+	healthWidth := 10
+	projectWidth := max(inner*13/100, 8)
+	portsWidth := max(inner-3-nameWidth-imageWidth-stateWidth-healthWidth-projectWidth-6, 8)
+	row := func(marker, name, image, state, health, ports, project string) string {
+		return marker + " " + cell(name, nameWidth) + " " + cell(image, imageWidth) + " " +
+			cell(state, stateWidth) + " " + cell(health, healthWidth) + " " +
+			cell(ports, portsWidth) + " " + cell(project, projectWidth)
+	}
+	rows := []string{
+		"Search: " + cell(emptyDash(model.filter), max(inner-25, 8)) + "  Sort: " + model.sortName(),
+		"",
+		lipgloss.NewStyle().Foreground(ui.Primary).Render(row(" ", "NAME", "IMAGE", "STATE", "HEALTH", "PORTS", "PROJECT")),
+	}
 	if len(visible) == 0 {
 		rows = append(rows, "", "No containers match the current filter.")
 	} else {
-		limit := max(model.height-5, 1)
+		limit := max(model.height-8, 1)
 		for index, value := range visible {
 			if index >= limit {
 				rows = append(rows, fmt.Sprintf("… %d more", len(visible)-index))
 				break
 			}
-			marker := " "
+			marker := stateMarker(value.State)
 			if value.ID == model.selectedID {
 				marker = ">"
 			}
-			state := strings.TrimSpace(value.State + " " + value.Status)
-			if value.Health != "" {
-				state += " [" + value.Health + "]"
+			ports := make([]string, 0, len(value.Ports))
+			for _, port := range value.Ports {
+				ports = append(ports, formatPort(port))
 			}
-			row := fmt.Sprintf("%s %-15s %-12s %-21s %s", marker,
-				ui.Truncate(safe(displayName(value)), 15), safe(shortID(value.ID)),
-				ui.Truncate(safe(value.Image), 21), safe(state))
-			rows = append(rows, ui.Truncate(row, max(width-4, 1)))
+			line := row(marker, safe(displayName(value)), safe(value.Image), safe(value.State),
+				safe(emptyDash(value.Health)), safe(strings.Join(ports, ", ")), safe(composeProject(value.Labels)))
+			if value.ID == model.selectedID {
+				line = lipgloss.NewStyle().Foreground(lipgloss.Color("#EAF6FF")).Background(lipgloss.Color("#10365C")).Render(line)
+			} else {
+				line = semanticColor(value.State, value.Health).Render(marker) + " " +
+					cell(displayName(value), nameWidth) + " " + cell(value.Image, imageWidth) + " " +
+					semanticColor(value.State, "").Render(cell(value.State, stateWidth)) + " " +
+					semanticColor("", value.Health).Render(cell(emptyDash(value.Health), healthWidth)) + " " +
+					cell(strings.Join(ports, ", "), portsWidth) + " " + cell(composeProject(value.Labels), projectWidth)
+			}
+			rows = append(rows, ui.Truncate(line, inner))
 		}
 	}
-	header := fmt.Sprintf("CONTAINERS (%d/%d)  filter: %s  sort: %s", len(visible), len(model.containers), emptyDash(model.filter), model.sortName())
+	title := "▣  CONTAINERS"
+	count := fmt.Sprintf("%d shown / %d total", len(visible), len(model.containers))
+	header := title + strings.Repeat(" ", max(inner-lipgloss.Width(title)-lipgloss.Width(count), 1)) + count
 	return pagePanel(header, strings.Join(rows, "\n"), width)
 }
 
@@ -78,26 +106,47 @@ func (model Model) secondaryPanel(width int) string {
 
 func (model Model) detailsPanel(width int) string {
 	if model.selectedID == "" {
-		return pagePanel("DETAILS", "Select a container and press enter.", width)
+		return pagePanel("CONTAINER DETAILS", "No container selected.", width)
 	}
 	if model.detailsState.loading && model.detailsID != model.selectedID {
-		return pagePanel("DETAILS", model.spinner.View()+" Loading details…", width)
+		return pagePanel("CONTAINER DETAILS", model.spinner.View()+" Loading details…", width)
 	}
 	if model.detailsState.err != nil && model.detailsID != model.selectedID {
-		return pagePanel("DETAILS", "Unavailable: "+safe(model.detailsState.err.Error())+"\nPress enter to retry.", width)
+		return pagePanel("CONTAINER DETAILS", "Unavailable: "+safe(model.detailsState.err.Error())+"\nPress i to retry.", width)
 	}
 	details := model.details
 	if model.detailsID != model.selectedID {
-		return pagePanel("DETAILS", "Press enter to load selected container details.", width)
+		return pagePanel("CONTAINER DETAILS", model.spinner.View()+" Loading selected container…", width)
 	}
+	selected := model.selectedSummary()
 	lines := []string{
-		fmt.Sprintf("%s  %s", safe(emptyDash(details.Name)), safe(shortID(details.ID))),
-		fmt.Sprintf("State: %s  running=%t paused=%t exit=%d pid=%d", safe(emptyDash(details.State.Status)), details.State.Running, details.State.Paused, details.State.ExitCode, details.State.PID),
-		"Image: " + safe(emptyDash(details.Image)),
-		"Command: " + safe(strings.TrimSpace(details.Path+" "+strings.Join(details.Args, " "))),
-		fmt.Sprintf("Platform: %s  Driver: %s  Restarts: %d", safe(emptyDash(details.Platform)), safe(emptyDash(details.Driver)), details.RestartCount),
-		fmt.Sprintf("Host: %s  User: %s  Workdir: %s", safe(emptyDash(details.Hostname)), safe(emptyDash(details.User)), safe(emptyDash(details.WorkingDir))),
-		fmt.Sprintf("Mounts: %d  Networks: %d", len(details.Mounts), len(details.Networks)),
+		fmt.Sprintf("Name:       %s", safe(emptyDash(details.Name))),
+		fmt.Sprintf("ID:         %s", safe(shortID(details.ID))),
+		"Image:      " + safe(emptyDash(details.Image)),
+		"Status:     " + safe(emptyDash(details.State.Status)),
+		"Health:     " + safe(emptyDash(details.State.Health)),
+		"Project:    " + safe(composeProject(selected.Labels)),
+		"Service:    " + safe(composeService(selected.Labels)),
+		"Ports:      " + safe(summaryPorts(selected)),
+		fmt.Sprintf("Restarts:   %d", details.RestartCount),
+	}
+	if len(details.Networks) > 0 {
+		networks := make([]string, 0, len(details.Networks))
+		for _, network := range details.Networks {
+			value := network.Name
+			if network.IPAddress != "" {
+				value += " (" + network.IPAddress + ")"
+			}
+			networks = append(networks, value)
+		}
+		lines = append(lines, "Networks:   "+safe(strings.Join(networks, ", ")))
+	}
+	if len(details.Mounts) > 0 {
+		mounts := make([]string, 0, len(details.Mounts))
+		for _, mount := range details.Mounts {
+			mounts = append(mounts, mount.Destination)
+		}
+		lines = append(lines, "Volumes:    "+safe(strings.Join(mounts, ", ")))
 	}
 	if len(details.Labels) > 0 {
 		lines = append(lines, "Labels:")
@@ -116,7 +165,7 @@ func (model Model) detailsPanel(width int) string {
 			lines = append(lines, "  "+safe(value))
 		}
 	}
-	return pagePanel("DETAILS", model.windowBody(strings.Join(lines, "\n")), width)
+	return pagePanel("ⓘ  CONTAINER DETAILS", model.windowBody(strings.Join(lines, "\n")), width)
 }
 
 func (model Model) processesPanel(width int) string {
@@ -181,17 +230,6 @@ func (model Model) overlayView() string {
 	switch model.overlay {
 	case filterOverlay:
 		return pagePanel("FILTER", "Search words; state:<value>; label:<key>=<value>\n\n> "+safe(model.filterEdit)+"_\n\nenter apply   esc cancel", max(min(model.width, 76), 1))
-	case actionsOverlay:
-		lines := []string{"Container: " + safe(name), ""}
-		for index, action := range actions {
-			marker := " "
-			if index == model.action {
-				marker = ">"
-			}
-			lines = append(lines, marker+" "+string(action))
-		}
-		lines = append(lines, "", "enter choose   esc cancel")
-		return pagePanel("ACTIONS", strings.Join(lines, "\n"), max(min(model.width, 54), 1))
 	case renameOverlay:
 		return pagePanel("RENAME "+safe(name), "> "+safe(model.renameEdit)+"_\n\nenter submit   esc cancel", max(min(model.width, 60), 1))
 	case confirmOverlay:
@@ -250,6 +288,78 @@ func (model Model) selectedName() string {
 
 func (model Model) sortName() string {
 	return [...]string{"name", "state", "newest"}[model.sort]
+}
+
+func cell(value string, width int) string {
+	value = ui.Truncate(safe(value), max(width, 1))
+	return value + strings.Repeat(" ", max(width-lipgloss.Width(value), 0))
+}
+
+func composeProject(labels map[string]string) string {
+	if project := strings.TrimSpace(labels["com.docker.compose.project"]); project != "" {
+		return project
+	}
+	return "—"
+}
+
+func composeService(labels map[string]string) string {
+	if service := strings.TrimSpace(labels["com.docker.compose.service"]); service != "" {
+		return service
+	}
+	return "—"
+}
+
+func formatPort(port backendcontainers.Port) string {
+	protocol := port.Protocol
+	if protocol == "" {
+		protocol = "tcp"
+	}
+	if port.PublicPort == 0 {
+		return fmt.Sprintf("%d/%s", port.PrivatePort, protocol)
+	}
+	host := port.IP
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = ""
+	} else {
+		host += ":"
+	}
+	return fmt.Sprintf("%s%d→%d/%s", host, port.PublicPort, port.PrivatePort, protocol)
+}
+
+func summaryPorts(value backendcontainers.Summary) string {
+	ports := make([]string, 0, len(value.Ports))
+	for _, port := range value.Ports {
+		ports = append(ports, formatPort(port))
+	}
+	if len(ports) == 0 {
+		return "—"
+	}
+	return strings.Join(ports, ", ")
+}
+
+func stateMarker(state string) string {
+	switch strings.ToLower(state) {
+	case "running":
+		return "●"
+	case "paused", "restarting":
+		return "●"
+	default:
+		return "○"
+	}
+}
+
+func semanticColor(state, health string) lipgloss.Style {
+	color := ui.Muted
+	if strings.EqualFold(state, "running") {
+		color = ui.Success
+	}
+	if strings.EqualFold(state, "paused") || strings.EqualFold(state, "restarting") || strings.EqualFold(health, "unhealthy") {
+		color = ui.Warning
+	}
+	if strings.EqualFold(state, "dead") {
+		color = ui.Danger
+	}
+	return lipgloss.NewStyle().Foreground(color)
 }
 
 func safe(value string) string { return ui.SanitizeLine(value) }

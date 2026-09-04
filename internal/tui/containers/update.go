@@ -24,11 +24,6 @@ const (
 	commandRemove  commandKind = "remove"
 )
 
-var actions = []commandKind{
-	commandStart, commandStop, commandRestart, commandPause,
-	commandUnpause, commandKill, commandRename, commandRemove,
-}
-
 type subscriptionReadyMsg struct {
 	generation   uint64
 	subscription backend.Subscription
@@ -190,6 +185,9 @@ func (model Model) handleEvent(event backend.EventEnvelope) (Model, tea.Cmd) {
 			model.clearSelection()
 		}
 		model.ensureVisibleSelection()
+		if model.selectedID != "" && model.mode == detailsView && model.detailsID != model.selectedID {
+			model.detailsState = panelState{loading: true}
+		}
 		return model, model.refreshVisibleTarget()
 	case backendcontainers.DetailsUpdated:
 		if event.Key.Kind != backendcontainers.RefreshKindDetails || event.Key.ID != model.selectedID || payload.Container.ID != model.selectedID {
@@ -221,19 +219,6 @@ func (model Model) handleKey(message tea.KeyPressMsg) (Model, tea.Cmd) {
 	if model.overlay == filterOverlay || model.overlay == renameOverlay {
 		return model.handleEditorKey(message)
 	}
-	if model.overlay == actionsOverlay {
-		switch key {
-		case "esc":
-			model.overlay = noOverlay
-		case "up", "k":
-			model.action = (model.action - 1 + len(actions)) % len(actions)
-		case "down", "j":
-			model.action = (model.action + 1) % len(actions)
-		case "enter":
-			return model.chooseAction(actions[model.action])
-		}
-		return model, nil
-	}
 	if model.overlay == confirmOverlay {
 		switch key {
 		case "esc", "n":
@@ -255,32 +240,24 @@ func (model Model) handleKey(message tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	switch key {
 	case "up", "k":
-		if model.mode == listView {
-			model.moveSelection(-1)
-		} else {
-			model.scroll = max(model.scroll-1, 0)
-		}
+		return model.selectRelative(-1)
 	case "down", "j":
-		if model.mode == listView {
-			model.moveSelection(1)
-		} else {
-			model.scroll++
-		}
-	case "enter":
-		if model.selectedID != "" {
-			return model.openDetails()
-		}
+		return model.selectRelative(1)
 	case "esc":
-		if model.mode != listView {
+		if model.mode != detailsView {
 			model = model.closeStream()
-			model.mode = listView
+			model.mode = detailsView
 		}
 	case "f":
 		model.filterEdit, model.overlay = model.filter, filterOverlay
 	case "o":
 		model.sort = (model.sort + 1) % 3
-		model.ensureVisibleSelection()
-	case "p":
+		return model.ensureSelectionDetails()
+	case "i", "enter":
+		if model.selectedID != "" {
+			return model.openDetails()
+		}
+	case "P":
 		if model.selectedID != "" {
 			model = model.closeStream()
 			model.mode = processesView
@@ -293,14 +270,27 @@ func (model Model) handleKey(message tea.KeyPressMsg) (Model, tea.Cmd) {
 		if model.selectedID != "" {
 			return model.openLogs()
 		}
-	case "s":
+	case "t":
 		if model.selectedID != "" {
 			return model.openStats()
 		}
-	case "a":
-		if model.selectedID != "" && model.pendingOperation == "" {
-			model.overlay, model.action = actionsOverlay, 0
+	case "s":
+		return model.startCommand(commandStart, "")
+	case "x":
+		return model.startCommand(commandStop, "")
+	case "R":
+		return model.startCommand(commandRestart, "")
+	case "p":
+		if model.selectedSummary().State == "paused" {
+			return model.startCommand(commandUnpause, "")
 		}
+		return model.startCommand(commandPause, "")
+	case "K":
+		return model.chooseAction(commandKill)
+	case "n":
+		return model.chooseAction(commandRename)
+	case "d":
+		return model.chooseAction(commandRemove)
 	}
 	return model, nil
 }
@@ -314,8 +304,7 @@ func (model Model) handleEditorKey(message tea.KeyPressMsg) (Model, tea.Cmd) {
 	if key == "enter" {
 		if model.overlay == filterOverlay {
 			model.filter, model.overlay = strings.TrimSpace(model.filterEdit), noOverlay
-			model.ensureVisibleSelection()
-			return model, nil
+			return model.ensureSelectionDetails()
 		}
 		if strings.TrimSpace(model.renameEdit) == "" {
 			model.notice = "Container name cannot be blank"
@@ -398,6 +387,27 @@ func (model Model) openDetails() (Model, tea.Cmd) {
 	model.selectionGen++
 	model.detailsState = panelState{loading: true, stale: model.detailsID == model.selectedID}
 	return model, requestTarget(model.api, model.generation, model.selectionGen, backend.RefreshKey{Kind: backendcontainers.RefreshKindDetails, ID: model.selectedID})
+}
+
+func (model Model) selectRelative(delta int) (Model, tea.Cmd) {
+	previous := model.selectedID
+	model.moveSelection(delta)
+	if model.selectedID == "" || model.selectedID == previous {
+		return model, nil
+	}
+	return model.openDetails()
+}
+
+func (model Model) ensureSelectionDetails() (Model, tea.Cmd) {
+	previous := model.selectedID
+	model.ensureVisibleSelection()
+	if model.selectedID == "" {
+		return model, nil
+	}
+	if previous != model.selectedID || model.detailsID != model.selectedID {
+		return model.openDetails()
+	}
+	return model, nil
 }
 
 func (model Model) refreshVisibleTarget() tea.Cmd {
@@ -485,10 +495,19 @@ func (model *Model) clearSelection() {
 	model.closeStreamPointer()
 	model.selectedID = ""
 	model.selectionGen++
-	model.mode = listView
+	model.mode = detailsView
 	model.details, model.detailsID = backendcontainers.Details{}, ""
 	model.processes = backendcontainers.ProcessesUpdated{}
 	model.detailsState, model.processState = panelState{}, panelState{}
+}
+
+func (model Model) selectedSummary() backendcontainers.Summary {
+	for _, value := range model.containers {
+		if value.ID == model.selectedID {
+			return value
+		}
+	}
+	return backendcontainers.Summary{}
 }
 
 func (model Model) current(generation uint64) bool {
