@@ -267,11 +267,12 @@ func TestCommandsAndDestructiveConfirmation(t *testing.T) {
 	api := &fakeAPI{}
 	model := New(context.Background(), &fakeBackend{}, api)
 	model.active, model.generation, model.selectedID, model.pageCtx = true, 1, "abc", context.Background()
+	model.containers = []backendcontainers.Summary{{ID: "abc", Names: []string{"web"}}}
 	model, command := model.startCommand(commandStart, "")
 	if model.pendingOperation != "start" {
 		t.Fatal("start was not marked pending")
 	}
-	finished := command().(commandFinishedMsg)
+	finished := mustFinish(t, command)
 	model, _ = model.Update(finished)
 	if len(api.commands) != 1 || api.commands[0] != "start" || model.pendingOperation != "" || model.notice != "" {
 		t.Fatalf("start command state = %v pending=%q notice=%q", api.commands, model.pendingOperation, model.notice)
@@ -284,9 +285,79 @@ func TestCommandsAndDestructiveConfirmation(t *testing.T) {
 	model.force, model.volumes = true, true
 	model.overlay = noOverlay
 	model, command = model.startCommand(commandRemove, "")
-	_ = command().(commandFinishedMsg)
+	_ = mustFinish(t, command)
 	if got := api.commands[len(api.commands)-1]; got != "remove:true:true" {
 		t.Fatalf("remove options = %q", got)
+	}
+}
+
+func TestQuickCommandsRequireYNConfirmation(t *testing.T) {
+	api := &fakeAPI{}
+	model := New(context.Background(), &fakeBackend{}, api).SetSize(80, 24)
+	model.active, model.generation, model.selectedID, model.hasData, model.pageCtx = true, 1, "abc", true, context.Background()
+	model.containers = []backendcontainers.Summary{{ID: "abc", Names: []string{"web"}, State: "running"}}
+
+	for _, key := range []string{"s", "x", "R", "p", "d"} {
+		updated, command := model.handleKey(keyPress(key))
+		if command != nil || updated.overlay != confirmOverlay {
+			t.Fatalf("%s executed without confirmation: overlay=%v cmd=%v", key, updated.overlay, command != nil)
+		}
+		if !strings.Contains(updated.View(), "Are you sure you want to") {
+			t.Fatalf("%s confirmation prompt missing:\n%s", key, updated.View())
+		}
+		canceled, command := updated.handleKey(keyPress("n"))
+		if command != nil || canceled.overlay != noOverlay || len(api.commands) != 0 {
+			t.Fatalf("%s n did not cancel cleanly", key)
+		}
+	}
+
+	model, command := model.handleKey(keyPress("s"))
+	if command != nil || model.confirm != commandStart {
+		t.Fatal("start confirmation was not opened")
+	}
+	model, command = model.handleKey(keyPress("y"))
+	if command == nil || model.overlay != progressOverlay || model.pendingOperation != "start" {
+		t.Fatal("y did not start the confirmed command")
+	}
+	if !strings.Contains(model.View(), "Start web") {
+		t.Fatalf("progress overlay missing:\n%s", model.View())
+	}
+	model, extra := model.handleKey(keyPress("s"))
+	if extra != nil || model.overlay != progressOverlay || len(api.commands) != 0 {
+		t.Fatal("repeat command was accepted while Docker was still working")
+	}
+	finished := mustFinish(t, command)
+	model, _ = model.Update(finished)
+	if model.overlay != noOverlay || model.pendingOperation != "" {
+		t.Fatal("progress overlay was not closed after the command finished")
+	}
+	if api.commands[0] != "start" {
+		t.Fatalf("confirmed command = %v", api.commands)
+	}
+}
+
+func TestCommandProgressSpinnerKeepsTicking(t *testing.T) {
+	model := New(context.Background(), &fakeBackend{}, &fakeAPI{})
+	model.active, model.generation, model.selectedID, model.pageCtx = true, 1, "abc", context.Background()
+	model, command := model.startCommand(commandStart, "")
+	commands := commandCmds(command)
+	if len(commands) < 2 {
+		t.Fatal("command progress did not start a spinner tick")
+	}
+	var tick tea.Msg
+	for _, item := range commands {
+		message := item()
+		if _, ok := message.(commandFinishedMsg); ok {
+			continue
+		}
+		tick = message
+	}
+	if tick == nil {
+		t.Fatal("command batch did not include a spinner tick message")
+	}
+	model, next := model.Update(tick)
+	if model.Activity() == "" || next == nil {
+		t.Fatal("progress spinner did not continue after the first tick")
 	}
 }
 
@@ -307,7 +378,7 @@ func TestEveryContainerCommandUsesExistingAPI(t *testing.T) {
 		if command == nil {
 			t.Fatalf("%s returned no command", operation.kind)
 		}
-		_ = command().(commandFinishedMsg)
+		_ = mustFinish(t, command)
 	}
 	if strings.Join(api.commands, ",") != strings.Join(want, ",") {
 		t.Fatalf("commands = %v, want %v", api.commands, want)
@@ -320,11 +391,16 @@ func TestLeavingPageCancelsCommandWaitAndRejectsItsLateMessage(t *testing.T) {
 	model.active, model.generation, model.selectedID = true, 4, "abc"
 	model.pageCtx, model.cancelPage = context.WithCancel(context.Background())
 	model, command := model.startCommand(commandStart, "")
-	finished := make(chan tea.Msg, 1)
-	go func() { finished <- command() }()
+	results := make(chan tea.Msg, 1)
+	go func() {
+		result, ok := finishResult(command)
+		if ok {
+			results <- result
+		}
+	}()
 	<-api.started
 	model = model.Deactivate()
-	message := <-finished
+	message := <-results
 	model, _ = model.Update(message)
 	if model.notice != "" || model.pendingOperation != "" {
 		t.Fatalf("late canceled wait changed inactive page: notice=%q pending=%q", model.notice, model.pendingOperation)
@@ -376,6 +452,39 @@ func TestDeactivationClosesSubscriptionAndRejectsLateEvent(t *testing.T) {
 	if len(model.containers) != 0 {
 		t.Fatal("late event changed inactive model")
 	}
+}
+
+func commandCmds(command tea.Cmd) []tea.Cmd {
+	if command == nil {
+		return nil
+	}
+	message := command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		return append([]tea.Cmd(nil), batch...)
+	}
+	return []tea.Cmd{func() tea.Msg { return message }}
+}
+
+func mustFinish(t *testing.T, command tea.Cmd) commandFinishedMsg {
+	t.Helper()
+	finished, ok := finishResult(command)
+	if !ok {
+		t.Fatal("command did not produce a finished result")
+	}
+	return finished
+}
+
+func finishResult(command tea.Cmd) (commandFinishedMsg, bool) {
+	for _, item := range commandCmds(command) {
+		if item == nil {
+			continue
+		}
+		message := item()
+		if finished, ok := message.(commandFinishedMsg); ok {
+			return finished, true
+		}
+	}
+	return commandFinishedMsg{}, false
 }
 
 func batchCommands(command tea.Cmd) tea.BatchMsg {

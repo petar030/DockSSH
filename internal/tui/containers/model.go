@@ -4,6 +4,7 @@ package containers
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -57,6 +58,7 @@ const (
 	filterOverlay
 	renameOverlay
 	confirmOverlay
+	progressOverlay
 	logsOverlay
 )
 
@@ -196,7 +198,7 @@ func (model Model) CapturesInput() bool { return model.overlay != noOverlay }
 // Activity returns the compact shared-header indicator while the Containers
 // base data is being refreshed.
 func (model Model) Activity() string {
-	if model.loading {
+	if model.loading || model.pendingOperation != "" {
 		return model.spinner.View()
 	}
 	return ""
@@ -206,16 +208,22 @@ func (model Model) Help() string {
 	if model.overlay == logsOverlay {
 		return "j/k Scroll │ PgUp/PgDn Page │ g Top │ G Bottom/follow │ esc Close logs"
 	}
+	if model.overlay == confirmOverlay {
+		return "y Confirm │ n Cancel"
+	}
+	if model.overlay == progressOverlay {
+		return "Waiting for Docker…   ctrl+c quit"
+	}
 	if model.overlay != noOverlay {
 		return "enter confirm/apply   esc cancel   ctrl+c quit"
 	}
-	return "↑↓ Move │ f Find │ l Logs │ t Stats │ P Proc │ s Start │ x Stop │ R Restart │ p Pause │ K Kill │ n Rename │ d Remove"
+	return "↑↓ Move │ f Find │ l Logs │ t Stats │ P Proc │ s Start │ x Stop │ R Restart │ p Pause/Unpause │ K Kill │ n Rename │ d Remove"
 }
 
 func (model Model) Status() string {
 	switch {
 	case model.pendingOperation != "":
-		return model.pendingOperation + "…"
+		return fmt.Sprintf("%s %s…", commandLabel(commandKind(model.pendingOperation)), model.selectedName())
 	case model.notice != "":
 		return model.notice
 	case model.loading && !model.hasData:

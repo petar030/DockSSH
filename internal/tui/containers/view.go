@@ -295,14 +295,22 @@ func (model Model) overlayView() string {
 	case renameOverlay:
 		return pagePanel("RENAME "+safe(name), "> "+safe(model.renameEdit)+"_\n\nenter submit   esc cancel", max(min(model.width, 60), 1))
 	case confirmOverlay:
-		lines := []string{"Container: " + safe(name), ""}
-		if model.confirm == commandKill {
-			lines = append(lines, "Kill this container immediately?")
-		} else {
-			lines = append(lines, "Remove this container?", fmt.Sprintf("[f] force: %t", model.force), fmt.Sprintf("[v] remove anonymous volumes: %t", model.volumes))
+		lines := []string{
+			fmt.Sprintf("Are you sure you want to %s %s?", string(model.confirm), safe(name)),
+			"",
 		}
-		lines = append(lines, "", "y/enter confirm   n/esc cancel")
-		return pagePanel("CONFIRM "+strings.ToUpper(string(model.confirm)), strings.Join(lines, "\n"), max(min(model.width, 66), 1))
+		if model.confirm == commandRemove {
+			lines = append(lines,
+				fmt.Sprintf("[f] force: %t", model.force),
+				fmt.Sprintf("[v] remove anonymous volumes: %t", model.volumes),
+				"",
+			)
+		}
+		lines = append(lines, "y confirm   n cancel")
+		return pagePanel("CONFIRM", strings.Join(lines, "\n"), max(min(model.width, 66), 1))
+	case progressOverlay:
+		body := model.spinner.View() + " " + commandLabel(commandKind(model.pendingOperation)) + " " + safe(name) + "…\n\nDocker is still working. Repeat commands are ignored until this finishes."
+		return pagePanel("WORKING", body, max(min(model.width, 66), 1))
 	case logsOverlay:
 		return model.logsOverlayView()
 	}

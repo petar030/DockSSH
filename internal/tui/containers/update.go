@@ -152,6 +152,9 @@ func (model Model) Update(message tea.Msg) (Model, tea.Cmd) {
 			return model, nil
 		}
 		model.pendingOperation = ""
+		if model.overlay == progressOverlay {
+			model.overlay = noOverlay
+		}
 		if message.err != nil {
 			model.notice = commandErrorText(message.operation, message.err)
 			model.stale = model.hasData
@@ -169,7 +172,7 @@ func (model Model) Update(message tea.Msg) (Model, tea.Cmd) {
 	case logOpenedMsg, logValueMsg, logDoneMsg, statsOpenedMsg, statsValueMsg, statsDoneMsg, statsTickMsg:
 		return model.handleStreamMessage(message)
 	default:
-		if model.loading {
+		if model.loading || model.pendingOperation != "" {
 			var command tea.Cmd
 			model.spinner, command = model.spinner.Update(message)
 			return model, command
@@ -246,6 +249,9 @@ func (model Model) handleKey(message tea.KeyPressMsg) (Model, tea.Cmd) {
 	if model.overlay == filterOverlay || model.overlay == renameOverlay {
 		return model.handleEditorKey(message)
 	}
+	if model.overlay == progressOverlay {
+		return model, nil
+	}
 	if model.overlay == confirmOverlay {
 		switch key {
 		case "esc", "n":
@@ -302,16 +308,16 @@ func (model Model) handleKey(message tea.KeyPressMsg) (Model, tea.Cmd) {
 			return model.openStats()
 		}
 	case "s":
-		return model.startCommand(commandStart, "")
+		return model.chooseAction(commandStart)
 	case "x":
-		return model.startCommand(commandStop, "")
+		return model.chooseAction(commandStop)
 	case "R":
-		return model.startCommand(commandRestart, "")
+		return model.chooseAction(commandRestart)
 	case "p":
 		if model.selectedSummary().State == "paused" {
-			return model.startCommand(commandUnpause, "")
+			return model.chooseAction(commandUnpause)
 		}
-		return model.startCommand(commandPause, "")
+		return model.chooseAction(commandPause)
 	case "K":
 		return model.chooseAction(commandKill)
 	case "n":
@@ -360,12 +366,19 @@ func (model Model) handleEditorKey(message tea.KeyPressMsg) (Model, tea.Cmd) {
 }
 
 func (model Model) chooseAction(action commandKind) (Model, tea.Cmd) {
+	if model.selectedID == "" {
+		return model, nil
+	}
+	if model.pendingOperation != "" {
+		model.notice = commandLabel(commandKind(model.pendingOperation)) + " already in progress"
+		return model, nil
+	}
 	model.overlay = noOverlay
 	switch action {
 	case commandRename:
 		model.renameEdit, model.overlay = "", renameOverlay
 		return model, nil
-	case commandKill, commandRemove:
+	case commandStart, commandStop, commandRestart, commandPause, commandUnpause, commandKill, commandRemove:
 		model.confirm, model.overlay = action, confirmOverlay
 		model.force, model.volumes = false, false
 		return model, nil
@@ -379,10 +392,11 @@ func (model Model) startCommand(operation commandKind, rename string) (Model, te
 		return model, nil
 	}
 	model.pendingOperation = string(operation)
+	model.overlay = progressOverlay
 	model.notice = ""
 	id, generation, ctx := model.selectedID, model.generation, model.pageCtx
 	force, volumes := model.force, model.volumes
-	return model, func() tea.Msg {
+	return model, tea.Batch(func() tea.Msg {
 		var result backend.CommandResult
 		var err error
 		switch operation {
@@ -404,7 +418,7 @@ func (model Model) startCommand(operation commandKind, rename string) (Model, te
 			result, err = model.api.Remove(ctx, id, backendcontainers.RemoveOptions{Force: force, RemoveVolumes: volumes})
 		}
 		return commandFinishedMsg{generation: generation, id: id, operation: operation, result: result, err: err}
-	}
+	}, model.spinner.Tick)
 }
 
 func (model Model) openDetails() (Model, tea.Cmd) {
