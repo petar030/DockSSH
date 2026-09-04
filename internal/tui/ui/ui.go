@@ -47,6 +47,23 @@ func Truncate(value string, width int) string {
 	return ansi.Truncate(value, width, "…")
 }
 
+// ErrorNotice is the standard presentation for recoverable page, command and
+// stream errors. It sanitizes backend-controlled text and always fits one row.
+func ErrorNotice(value string, width int) string {
+	return notice("✕", value, width, lipgloss.NewStyle().Foreground(Danger))
+}
+
+// WarningNotice is the standard presentation for stale or degraded data that
+// remains safe to display.
+func WarningNotice(value string, width int) string {
+	return notice("!", value, width, lipgloss.NewStyle().Foreground(Warning))
+}
+
+func notice(symbol, value string, width int, style lipgloss.Style) string {
+	value = symbol + " " + strings.TrimSpace(SanitizeLine(value))
+	return style.Render(Truncate(value, width))
+}
+
 func FormatBytes(value int64) string {
 	const unit = int64(1024)
 	if value < unit {

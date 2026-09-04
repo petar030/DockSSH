@@ -15,7 +15,7 @@ func (model Model) View() string {
 	if !model.hasData {
 		content = model.spinner.View() + " Loading containers…"
 		if model.err != nil {
-			content = "Containers unavailable\n\n" + ui.SanitizeLine(model.err.Error()) + "\n\nPress r to retry."
+			content = "Containers unavailable\n\n" + ui.ErrorNotice(model.err.Error(), max(model.width-6, 1)) + "\n\nPress r to retry."
 		}
 		content = lipgloss.NewStyle().Padding(2, 3).Render(content)
 	} else if model.width >= 110 {
@@ -49,11 +49,15 @@ func (model Model) listPanel(width int) string {
 			cell(state, stateWidth) + " " + cell(health, healthWidth) + " " +
 			cell(ports, portsWidth) + " " + cell(project, projectWidth)
 	}
-	rows := []string{
-		"Search: " + cell(emptyDash(model.filter), max(inner-25, 8)) + "  Sort: " + model.sortName(),
+	rows := make([]string, 0, 5)
+	if feedback := model.feedback(); feedback != "" {
+		rows = append(rows, ui.ErrorNotice(feedback, inner), "")
+	}
+	rows = append(rows,
+		"Search: "+cell(emptyDash(model.filter), max(inner-25, 8))+"  Sort: "+model.sortName(),
 		"",
 		lipgloss.NewStyle().Foreground(ui.Primary).Render(row(" ", "NAME", "IMAGE", "STATE", "HEALTH", "PORTS", "PROJECT")),
-	}
+	)
 	if len(visible) == 0 {
 		rows = append(rows, "", "No containers match the current filter.")
 	} else {
@@ -91,6 +95,10 @@ func (model Model) listPanel(width int) string {
 	return pagePanel(header, strings.Join(rows, "\n"), width)
 }
 
+func (model Model) feedback() string {
+	return model.notice
+}
+
 func (model Model) secondaryPanel(width int) string {
 	switch model.mode {
 	case processesView:
@@ -112,7 +120,7 @@ func (model Model) detailsPanel(width int) string {
 		return pagePanel("CONTAINER DETAILS", model.spinner.View()+" Loading details…", width)
 	}
 	if model.detailsState.err != nil && model.detailsID != model.selectedID {
-		return pagePanel("CONTAINER DETAILS", "Unavailable: "+safe(model.detailsState.err.Error())+"\nPress i to retry.", width)
+		return pagePanel("CONTAINER DETAILS", ui.ErrorNotice("Unavailable: "+model.detailsState.err.Error(), max(width-4, 1))+"\nPress i to retry.", width)
 	}
 	details := model.details
 	if model.detailsID != model.selectedID {
@@ -176,7 +184,7 @@ func (model Model) processesPanel(width int) string {
 		return pagePanel("PROCESSES", "Unavailable for this container state.\nA stopped container has no process table.\n\nEsc returns to the list.", width)
 	}
 	if model.processState.err != nil {
-		return pagePanel("PROCESSES", "Unavailable: "+safe(model.processState.err.Error()), width)
+		return pagePanel("PROCESSES", ui.ErrorNotice("Unavailable: "+model.processState.err.Error(), max(width-4, 1)), width)
 	}
 	if len(model.processes.Rows) == 0 {
 		return pagePanel("PROCESSES", "No processes reported.", width)
@@ -199,7 +207,7 @@ func (model Model) logsPanel(width int) string {
 		lines = []string{"Waiting for log output…"}
 	}
 	if model.logErr != nil {
-		lines = append(lines, "", "Stream ended: "+safe(model.logErr.Error()))
+		lines = append(lines, "", ui.ErrorNotice("Stream ended: "+model.logErr.Error(), max(width-4, 1)))
 	}
 	return pagePanel("LOGS — "+shortID(model.selectedID), model.windowBody(strings.Join(lines, "\n")), width)
 }
@@ -210,7 +218,7 @@ func (model Model) statsPanel(width int) string {
 		if strings.Contains(strings.ToLower(model.statsErr.Error()), "conflict") {
 			message = "Stats unavailable for this container state."
 		}
-		return pagePanel("STATS", message+"\n\nEsc returns to the list.", width)
+		return pagePanel("STATS", ui.ErrorNotice(message, max(width-4, 1))+"\n\nEsc returns to details.", width)
 	}
 	if !model.hasStats {
 		return pagePanel("STATS", model.spinner.View()+" Waiting for statistics…", width)

@@ -190,10 +190,20 @@ func (app *App) render() string {
 	contentHeight := app.height - frameRows
 	body = lipgloss.NewStyle().Width(app.width).Height(contentHeight).Render(body)
 	return strings.Join([]string{
-		renderHeader(app.width, app.activeTab, connection),
+		renderHeader(app.width, app.activeTab, connection, app.pageActivity()),
 		body,
 		renderFooter(app.width, status, pageHelp, globalHelp),
 	}, "\n")
+}
+
+func (app *App) pageActivity() string {
+	if app.activeTab == 0 {
+		return app.dashboard.Activity()
+	}
+	if app.activeTab == 1 {
+		return app.containers.Activity()
+	}
+	return ""
 }
 
 func (app *App) pageContent() string {

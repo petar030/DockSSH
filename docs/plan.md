@@ -438,6 +438,18 @@ Request acceptance is not Docker success. Conversely, canceling only a TUI
 wait after backend acceptance is not Docker cancellation. Page code must keep
 those concepts separate in spinner, notice and error wording.
 
+Short commands such as container start, stop, restart, pause and unpause do not
+show persistent or in-progress messages in the page. Their successful result is
+represented by the authoritative page update; only failures produce a visible
+command notice. Progress indicators are reserved for actual jobs and streams.
+
+All pages use the shared TUI error presentation: a red, single-line,
+terminal-sanitized and width-bounded notice for failures, and an amber notice
+when stale or degraded data remains usable. Initial-load failures include a
+retry instruction; targeted-panel and stream failures stay inside their owning
+panel; command failures appear in the active page workspace. Page models own
+recovery behavior, but must not invent page-specific error colors or formats.
+
 ### Page-specific UI requirements and backend edge cases
 
 | Page | Required TUI behavior and special cases |
@@ -510,6 +522,12 @@ Smaller terminals show a resize message and only the quit/help controls. The
 root layout uses one title/connection row, one horizontal tab row, the remaining
 space for page content, and two bordered footer content rows: page controls
 with status, followed by unified application controls.
+Refresh activity is shown consistently for every implemented page as a small
+spinner beside the Docker connection state in the shared header. Page content
+does not show a separate refresh label or consume a row for the spinner.
+Every page-level manual refresh must start its spinner tick loop when the
+request is submitted and stop displaying it when the corresponding page update
+or request failure is received.
 
 At 120 columns and wider, list/detail pages use a roughly 2/3–1/3 horizontal
 workspace: the resource list stays visible on the left, while selected-resource

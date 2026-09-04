@@ -28,6 +28,20 @@ func TestTruncatePreservesANSIBoundariesAndWidth(t *testing.T) {
 	}
 }
 
+func TestStandardNoticesAreSafeAndWidthBounded(t *testing.T) {
+	for _, notice := range []string{
+		ErrorNotice("daemon failed\x1b[2J with a long explanation", 18),
+		WarningNotice("stale data\nwith another line", 18),
+	} {
+		if strings.Contains(notice, "\x1b[2J") || strings.Contains(notice, "\n") {
+			t.Fatalf("unsafe control sequence survived notice rendering: %q", notice)
+		}
+		if width := lipgloss.Width(notice); width > 18 {
+			t.Fatalf("notice width = %d, want <= 18", width)
+		}
+	}
+}
+
 func TestFormatBytes(t *testing.T) {
 	for _, test := range []struct {
 		value int64

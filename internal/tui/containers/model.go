@@ -173,7 +173,10 @@ func (model Model) Refresh() (Model, tea.Cmd) {
 	}
 	model.loading = true
 	model.err = nil
-	return model, requestBase(model.backend, model.generation)
+	return model, tea.Batch(
+		requestBase(model.backend, model.generation),
+		model.spinner.Tick,
+	)
 }
 
 func (model Model) SetSize(width, height int) Model {
@@ -185,6 +188,15 @@ func (model Model) SetSize(width, height int) Model {
 func (model Model) Active() bool { return model.active }
 
 func (model Model) CapturesInput() bool { return model.overlay != noOverlay }
+
+// Activity returns the compact shared-header indicator while the Containers
+// base data is being refreshed.
+func (model Model) Activity() string {
+	if model.loading {
+		return model.spinner.View()
+	}
+	return ""
+}
 
 func (model Model) Help() string {
 	if model.overlay != noOverlay {

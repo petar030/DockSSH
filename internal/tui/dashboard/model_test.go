@@ -123,6 +123,19 @@ func TestDashboardSubscribesBeforeRefreshAndAppliesSummary(t *testing.T) {
 	}
 }
 
+func TestManualRefreshStartsHeaderSpinner(t *testing.T) {
+	model := New(context.Background(), &fakeBackend{})
+	model.active, model.generation = true, 1
+	model, command := model.Refresh()
+	if model.Activity() == "" {
+		t.Fatal("manual refresh did not expose header activity")
+	}
+	batch, ok := command().(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("manual refresh command = %#v, want request and spinner tick", command)
+	}
+}
+
 func TestDashboardFailurePreservesLastSuccessfulData(t *testing.T) {
 	model := New(context.Background(), &fakeBackend{}).SetSize(100, 20)
 	model.active = true

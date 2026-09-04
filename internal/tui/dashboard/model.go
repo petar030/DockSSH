@@ -86,7 +86,10 @@ func (model Model) Refresh() (Model, tea.Cmd) {
 	}
 	model.loading = true
 	model.err = nil
-	return model, requestRefresh(model.backend, model.generation)
+	return model, tea.Batch(
+		requestRefresh(model.backend, model.generation),
+		model.spinner.Tick,
+	)
 }
 
 func (model Model) SetSize(width, height int) Model {
@@ -101,6 +104,15 @@ func (model Model) HasData() bool { return model.hasData }
 
 func (model Model) EngineAvailable() bool {
 	return model.hasData && model.summary.Engine.Available
+}
+
+// Activity returns the compact shared-header indicator while this page is
+// waiting for an authoritative refresh.
+func (model Model) Activity() string {
+	if model.loading {
+		return model.spinner.View()
+	}
+	return ""
 }
 
 func (model Model) Status() string {

@@ -161,7 +161,10 @@ func (model Model) Update(message tea.Msg) (Model, tea.Cmd) {
 			}
 			return model, nil
 		}
-		model.notice = fmt.Sprintf("%s accepted; waiting for authoritative refresh", message.operation)
+		// A successful short command needs no persistent notification. The
+		// Command Executor already requested authoritative page refreshes; the
+		// resulting events update the list and details independently.
+		model.notice = ""
 		return model, nil
 	case logOpenedMsg, logValueMsg, logDoneMsg, statsOpenedMsg, statsValueMsg, statsDoneMsg, statsTickMsg:
 		return model.handleStreamMessage(message)
@@ -539,6 +542,14 @@ func commandErrorText(operation commandKind, err error) string {
 		}
 	}
 	return fmt.Sprintf("%s: %s", operation, suffix)
+}
+
+func commandLabel(operation commandKind) string {
+	value := string(operation)
+	if value == "" {
+		return "Command"
+	}
+	return strings.ToUpper(value[:1]) + value[1:]
 }
 
 func trimLastRune(value string) string {

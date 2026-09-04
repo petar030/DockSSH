@@ -160,6 +160,18 @@ func TestActivationSubscribesBeforeRefreshAndAppliesList(t *testing.T) {
 	}
 }
 
+func TestManualRefreshStartsHeaderSpinner(t *testing.T) {
+	model := New(context.Background(), &fakeBackend{}, &fakeAPI{})
+	model.active, model.generation = true, 1
+	model, command := model.Refresh()
+	if model.Activity() == "" {
+		t.Fatal("manual refresh did not expose header activity")
+	}
+	if commands := batchCommands(command); len(commands) != 2 {
+		t.Fatalf("manual refresh returned %d commands, want request and spinner tick", len(commands))
+	}
+}
+
 func TestSelectionLoadsDetailsAndQuickActionsAreInline(t *testing.T) {
 	api := &fakeAPI{}
 	model := New(context.Background(), &fakeBackend{}, api).SetSize(140, 28)
@@ -261,8 +273,8 @@ func TestCommandsAndDestructiveConfirmation(t *testing.T) {
 	}
 	finished := command().(commandFinishedMsg)
 	model, _ = model.Update(finished)
-	if len(api.commands) != 1 || api.commands[0] != "start" || model.pendingOperation != "" {
-		t.Fatalf("start command state = %v pending=%q", api.commands, model.pendingOperation)
+	if len(api.commands) != 1 || api.commands[0] != "start" || model.pendingOperation != "" || model.notice != "" {
+		t.Fatalf("start command state = %v pending=%q notice=%q", api.commands, model.pendingOperation, model.notice)
 	}
 
 	model, command = model.chooseAction(commandRemove)

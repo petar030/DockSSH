@@ -8,16 +8,20 @@ import (
 	"github.com/petar030/ssh-native-docker-tui/internal/tui/ui"
 )
 
-func renderTopBar(width int, connection string) string {
+func renderTopBar(width int, connection, activity string) string {
 	title := lipgloss.NewStyle().Bold(true).Foreground(ui.Primary).Render("◆  DOCKER TUI")
-	status := lipgloss.NewStyle().Foreground(ui.Muted).Render(connection)
+	status := connection
+	if activity != "" {
+		status = activity + "  " + status
+	}
+	status = lipgloss.NewStyle().Foreground(ui.Muted).Render(status)
 	gap := max(width-lipgloss.Width(title)-lipgloss.Width(status), 1)
 	return ui.Truncate(title+strings.Repeat(" ", gap)+status, width)
 }
 
-func renderHeader(width, active int, connection string) string {
+func renderHeader(width, active int, connection, activity string) string {
 	contentWidth := max(width-4, 1)
-	body := padHeaderLine(renderTopBar(contentWidth, connection), contentWidth) + "\n" +
+	body := padHeaderLine(renderTopBar(contentWidth, connection, activity), contentWidth) + "\n" +
 		padHeaderLine(renderTabs(contentWidth, active), contentWidth)
 	return lipgloss.NewStyle().Padding(0, 1).
 		Border(lipgloss.RoundedBorder()).BorderForeground(ui.Border).Render(body)
@@ -46,8 +50,6 @@ func renderFooter(width int, status, pageHelp, globalHelp string) string {
 	pageHelp = ui.Truncate(pageHelp, inner)
 	if pageHelp == "" {
 		pageHelp = ui.Truncate(ui.SanitizeLine(status), inner)
-	} else {
-		pageHelp = ui.Truncate(pageHelp+"   │   "+ui.SanitizeLine(status), inner)
 	}
 	globalHelp = ui.Truncate(globalHelp, inner)
 	body := lipgloss.NewStyle().Foreground(ui.Primary).Render(pageHelp) + "\n" +

@@ -10,9 +10,9 @@ import (
 
 func (model Model) View() string {
 	if !model.hasData {
-		message := model.spinner.View() + " Loading Dashboard data…"
+		message := "Loading Dashboard data…"
 		if model.err != nil {
-			message = "Dashboard unavailable\n\n" + ui.SanitizeLine(errorText(model.err)) + "\n\nPress r to retry."
+			message = "Dashboard unavailable\n\n" + ui.ErrorNotice(errorText(model.err), max(model.width-6, 1)) + "\n\nPress r to retry."
 		}
 		return lipgloss.NewStyle().Padding(2, 3).Render(message)
 	}
@@ -34,12 +34,8 @@ func (model Model) View() string {
 		content = lipgloss.JoinVertical(lipgloss.Left, firstRow, secondRow)
 	}
 
-	if model.stale || model.loading {
-		state := model.spinner.View() + " refreshing"
-		if model.stale && model.err != nil {
-			state = "stale: " + ui.SanitizeLine(errorText(model.err))
-		}
-		content = stateStyle(model.stale).Render(state) + "\n" + content
+	if model.stale && model.err != nil {
+		content = ui.WarningNotice("stale: "+errorText(model.err), model.width) + "\n" + content
 	}
 	return content
 }
@@ -118,12 +114,4 @@ func safeDash(value string) string {
 		return "—"
 	}
 	return value
-}
-
-func stateStyle(stale bool) lipgloss.Style {
-	color := ui.Muted
-	if stale {
-		color = ui.Warning
-	}
-	return lipgloss.NewStyle().Foreground(color)
 }
