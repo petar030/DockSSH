@@ -662,9 +662,8 @@ func configErrorText(operation string, err error) string {
 	if err == nil {
 		return ""
 	}
-	var applicationError *backend.AppError
-	if errors.As(err, &applicationError) && applicationError.Code == backend.ErrorPermissionDenied && applicationError.Resource == "configured Compose root" {
-		return "Compose creation is unavailable: restart with -compose-root /path/to/compose-projects"
+	if errors.Is(err, &backend.AppError{Code: backend.ErrorPermissionDenied, Resource: "configured Compose root"}) {
+		return "Compose file directory is not configured"
 	}
 	return operation + " failed: " + err.Error()
 }

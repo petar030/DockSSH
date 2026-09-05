@@ -375,7 +375,7 @@ func TestConfigErrorExplainsMissingComposeRoot(t *testing.T) {
 		Resource: "configured Compose root",
 	}
 	message := configErrorText("Create configuration", err)
-	if !strings.Contains(message, "-compose-root") || strings.Contains(message, "permission_denied") {
+	if message != "Compose file directory is not configured" {
 		t.Fatalf("missing-root message = %q", message)
 	}
 }
