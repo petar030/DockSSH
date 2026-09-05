@@ -391,17 +391,12 @@ func (app *App) render() string {
 		body = app.helpView()
 	}
 
-	header := renderHeader(app.width, app.activeTab, connection, app.pageActivity())
-	footer := renderFooter(app.width, status, pageHelp, app.jobHelp(globalHelp))
-	// Derive the body height from the actual frame. Page help may occupy more
-	// than one row, so a fixed subtraction would leave the footer floating
-	// above the terminal bottom.
-	contentHeight := max(app.height-lipgloss.Height(header)-lipgloss.Height(footer)-2, 0)
+	contentHeight := app.height - frameRows
 	body = lipgloss.NewStyle().Width(app.width).Height(contentHeight).Render(body)
 	rendered := strings.Join([]string{
-		header,
+		renderHeader(app.width, app.activeTab, connection, app.pageActivity()),
 		body,
-		footer,
+		renderFooter(app.width, status, pageHelp, app.jobHelp(globalHelp)),
 	}, "\n")
 	if app.jobs.CapturesInput() {
 		if failure := app.jobs.FailurePrompt(app.width); failure != "" {
