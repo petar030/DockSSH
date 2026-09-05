@@ -23,11 +23,9 @@ func (m Model) View() string {
 		left := lipgloss.JoinVertical(lipgloss.Left,
 			m.versionView(leftWidth),
 			m.hostView(leftWidth),
+			m.driversView(leftWidth),
 		)
-		right := lipgloss.JoinVertical(lipgloss.Left,
-			m.driversView(rightWidth),
-			m.diskView(rightWidth),
-		)
+		right := m.diskView(rightWidth)
 		out = lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 	} else {
 		out = lipgloss.JoinVertical(lipgloss.Left, m.diskView(m.width), m.versionView(m.width), m.hostView(m.width), m.driversView(m.width))
