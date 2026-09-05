@@ -369,4 +369,15 @@ func TestConfigSaveFailureKeepsContentAndEditor(t *testing.T) {
 	}
 }
 
+func TestConfigErrorExplainsMissingComposeRoot(t *testing.T) {
+	err := &backend.AppError{
+		Code: backend.ErrorPermissionDenied, Operation: "select managed Compose configuration",
+		Resource: "configured Compose root",
+	}
+	message := configErrorText("Create configuration", err)
+	if !strings.Contains(message, "-compose-root") || strings.Contains(message, "permission_denied") {
+		t.Fatalf("missing-root message = %q", message)
+	}
+}
+
 const validEditorConfig = "services:\n  app:\n    image: nginx:latest\n"

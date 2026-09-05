@@ -2,6 +2,7 @@ package compose
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -660,6 +661,10 @@ func validateEditorConfig(content string) error {
 func configErrorText(operation string, err error) string {
 	if err == nil {
 		return ""
+	}
+	var applicationError *backend.AppError
+	if errors.As(err, &applicationError) && applicationError.Code == backend.ErrorPermissionDenied && applicationError.Resource == "configured Compose root" {
+		return "Compose creation is unavailable: restart with -compose-root /path/to/compose-projects"
 	}
 	return operation + " failed: " + err.Error()
 }
