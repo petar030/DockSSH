@@ -56,7 +56,7 @@ go run ./cmd/ssh-docker-tui \
   -dashboard-refresh=10s
 ```
 
-Dashboard, Containers, and Images are implemented. The remaining tabs show
+Dashboard, Containers, Images, and Volumes are implemented. The remaining tabs show
 explicit placeholders and will be added page by page. Use `[`/`]` or `1`–`8` to switch
 tabs, `r` to refresh, `?` for help, and `q` to disconnect. On Containers, use
 the displayed footer shortcuts: `enter` for details, `p` for processes, `l`
@@ -65,5 +65,7 @@ On Images, use `f` to filter, `v` to cycle all/tagged/dangling, `o` to sort,
 `i` for details, `h` for history, `t` to tag, `d` to remove, `p` for a safely
 filtered prune, and `u` to pull. `J` opens the session-wide job tracker; changing
 tabs never cancels an accepted job.
+On Volumes, use `f` to filter, `i` for details, `a` for attachments, `c` to
+create, `d` to remove, and `p` for a label-scoped prune.
 
 The executable entry point is `./cmd/ssh-docker-tui`.

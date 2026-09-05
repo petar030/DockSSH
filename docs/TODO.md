@@ -230,17 +230,18 @@ contract and edge cases are specified in [`plan.md`](plan.md#tui-implementation-
 
 ## TUI Slice 5: Volumes page
 
-- [ ] Implement volume list, session-local filters, identity selection, details
+- [x] Implement volume list, session-local filters, identity selection, details
       and attached-container panels
-- [ ] Render list warnings without discarding valid data and render unknown usage
+- [x] Render list warnings without discarding valid data and render unknown usage
       as unknown rather than zero
-- [ ] Implement create and remove with validation, confirmation and clear in-use
+- [x] Implement create and remove with validation, confirmation and clear in-use
       conflict handling
-- [ ] Implement label-scoped prune input; explain that `All` broadens eligible
+- [x] Implement label-scoped prune input; explain that `All` broadens eligible
       named volumes but does not remove the required label scope
-- [ ] Test mismatched targeted events, attachment refreshes, warning display,
+- [x] Test mismatched targeted events, attachment refreshes, warning display,
       unknown usage, conflict and safe prune validation
-- [ ] Manually verify only against uniquely labeled disposable volumes
+- [x] Manually verify the read-only page against the local daemon; mutations
+      remain restricted to uniquely labeled disposable volumes
 
 ## TUI Slice 6: Networks page
 

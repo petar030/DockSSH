@@ -11,10 +11,12 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 	backendimages "github.com/petar030/ssh-native-docker-tui/internal/backend/images"
+	backendvolumes "github.com/petar030/ssh-native-docker-tui/internal/backend/volumes"
 	containerstui "github.com/petar030/ssh-native-docker-tui/internal/tui/containers"
 	"github.com/petar030/ssh-native-docker-tui/internal/tui/dashboard"
 	imagestui "github.com/petar030/ssh-native-docker-tui/internal/tui/images"
 	"github.com/petar030/ssh-native-docker-tui/internal/tui/ui"
+	volumestui "github.com/petar030/ssh-native-docker-tui/internal/tui/volumes"
 )
 
 const frameRows = 9
@@ -30,6 +32,7 @@ type App struct {
 	dashboard  dashboard.Model
 	containers containerstui.Model
 	images     imagestui.Model
+	volumes    volumestui.Model
 	jobs       *jobTracker
 }
 
@@ -37,6 +40,7 @@ type Application interface {
 	dashboard.Backend
 	Containers() *containers.API
 	Images() *backendimages.API
+	Volumes() *backendvolumes.API
 }
 
 func New(sessionCtx context.Context, application Application) *App {
@@ -45,6 +49,7 @@ func New(sessionCtx context.Context, application Application) *App {
 		dashboard:  dashboard.New(sessionCtx, application),
 		containers: containerstui.New(sessionCtx, application, application.Containers()),
 		images:     imagestui.New(sessionCtx, application, application.Images(), jobs),
+		volumes:    volumestui.New(sessionCtx, application, application.Volumes()),
 		jobs:       jobs,
 	}
 }
@@ -81,6 +86,11 @@ func (app *App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			app.images = updated
 			return app, command
 		}
+		if app.activeTab == 4 && app.volumes.CapturesInput() {
+			updated, command := app.volumes.Update(message)
+			app.volumes = updated
+			return app, command
+		}
 		key := message.String()
 		switch key {
 		case "q":
@@ -110,6 +120,11 @@ func (app *App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				app.images, command = app.images.Refresh()
 				return app, command
 			}
+			if app.activeTab == 4 {
+				var command tea.Cmd
+				app.volumes, command = app.volumes.Refresh()
+				return app, command
+			}
 		}
 		if index, ok := tabFromKey(key); ok {
 			return app.switchTab(index)
@@ -132,6 +147,11 @@ func (app *App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			app.images = updated
 			return app, command
 		}
+		if app.activeTab == 4 {
+			updated, command := app.volumes.Update(message)
+			app.volumes = updated
+			return app, command
+		}
 		return app, nil
 	}
 
@@ -142,9 +162,10 @@ func (app *App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	updatedDashboard, dashboardCommand := app.dashboard.Update(message)
 	updatedContainers, containersCommand := app.containers.Update(message)
 	updatedImages, imagesCommand := app.images.Update(message)
+	updatedVolumes, volumesCommand := app.volumes.Update(message)
 	jobsCommand := app.jobs.Update(message)
-	app.dashboard, app.containers, app.images = updatedDashboard, updatedContainers, updatedImages
-	return app, tea.Batch(dashboardCommand, containersCommand, imagesCommand, jobsCommand)
+	app.dashboard, app.containers, app.images, app.volumes = updatedDashboard, updatedContainers, updatedImages, updatedVolumes
+	return app, tea.Batch(dashboardCommand, containersCommand, imagesCommand, volumesCommand, jobsCommand)
 }
 
 func (app *App) View() tea.View {
@@ -165,6 +186,8 @@ func (app *App) switchTab(index int) (tea.Model, tea.Cmd) {
 		app.containers = app.containers.Deactivate()
 	} else if app.activeTab == 3 {
 		app.images = app.images.Deactivate()
+	} else if app.activeTab == 4 {
+		app.volumes = app.volumes.Deactivate()
 	}
 	app.activeTab = index
 	app.showHelp = false
@@ -186,6 +209,12 @@ func (app *App) switchTab(index int) (tea.Model, tea.Cmd) {
 		app.resizeActivePage()
 		return app, command
 	}
+	if app.activeTab == 4 {
+		var command tea.Cmd
+		app.volumes, command = app.volumes.Activate()
+		app.resizeActivePage()
+		return app, command
+	}
 	return app, nil
 }
 
@@ -196,6 +225,8 @@ func (app *App) resizeActivePage() {
 		app.containers = app.containers.SetSize(app.width, max(app.height-frameRows, 0))
 	} else if app.activeTab == 3 {
 		app.images = app.images.SetSize(app.width, max(app.height-frameRows, 0))
+	} else if app.activeTab == 4 {
+		app.volumes = app.volumes.SetSize(app.width, max(app.height-frameRows, 0))
 	}
 }
 
@@ -222,6 +253,8 @@ func (app *App) render() string {
 		pageHelp = app.containers.Help()
 	} else if app.activeTab == 3 {
 		pageHelp = app.images.Help()
+	} else if app.activeTab == 4 {
+		pageHelp = app.volumes.Help()
 	}
 	globalHelp := "[ / ] switch tab   1-8 open page   r refresh   ? help   q quit"
 	if app.showHelp {
@@ -251,6 +284,9 @@ func (app *App) pageActivity() string {
 	if app.activeTab == 3 {
 		return app.images.Activity()
 	}
+	if app.activeTab == 4 {
+		return app.volumes.Activity()
+	}
 	return ""
 }
 
@@ -263,6 +299,9 @@ func (app *App) pageContent() string {
 	}
 	if app.activeTab == 3 {
 		return app.images.View()
+	}
+	if app.activeTab == 4 {
+		return app.volumes.View()
 	}
 	item := tabs[app.activeTab]
 	return lipgloss.NewStyle().Padding(2, 3).Render(fmt.Sprintf(
@@ -280,6 +319,9 @@ func (app *App) pageStatus() string {
 	}
 	if app.activeTab == 3 {
 		return app.images.Status()
+	}
+	if app.activeTab == 4 {
+		return app.volumes.Status()
 	}
 	return tabs[app.activeTab].label + " is not implemented yet"
 }
@@ -303,6 +345,7 @@ func (app *App) deactivateAll() {
 	app.dashboard = app.dashboard.Deactivate()
 	app.containers = app.containers.Deactivate()
 	app.images = app.images.Deactivate()
+	app.volumes = app.volumes.Deactivate()
 }
 
 func (app *App) jobHelp(global string) string {

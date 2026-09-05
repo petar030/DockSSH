@@ -217,6 +217,12 @@ an unrelated image. Pull is optional because it uses the registry/network. Open
 a second SSH session to confirm selection and filters are independent while
 authoritative list updates and root job completion remain visible.
 
+For Volumes QA, use tab `5` to verify warnings, local filtering, name-based
+selection, details, unknown usage, and attachments. Create/remove only uniquely
+named disposable volumes. Prune only with the current run's unique label and
+confirm a differently labeled sentinel survives; selecting `All` must never
+remove the label requirement.
+
 ## Docker configuration
 
 The integration fixture follows normal Docker client configuration by default.
