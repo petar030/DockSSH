@@ -75,6 +75,7 @@ func (m Model) renderHeader() string {
 func (m Model) viewServer() string {
 	var b strings.Builder
 	b.WriteString(styleBold.Render("Server Settings") + "\n\n")
+	b.WriteString(styleMuted.Render("Controls the SSH listening address and server identity. Leave fields empty for defaults.") + "\n\n")
 
 	for i, f := range m.serverFields {
 		active := i == m.activeField
@@ -92,6 +93,7 @@ func (m Model) viewServer() string {
 func (m Model) viewAuth() string {
 	var b strings.Builder
 	b.WriteString(styleBold.Render("Authentication") + "\n\n")
+	b.WriteString(styleMuted.Render("Choose how SSH clients authenticate. Passwords are stored as hashes; keys use public keys.") + "\n\n")
 
 	// Status
 	if m.working.Auth.HasPasswordAuth() {
@@ -133,9 +135,9 @@ func (m Model) viewAuth() string {
 		b.WriteString(styleMuted.Render("Enter — remove   Esc — cancel") + "\n")
 
 	default:
-		b.WriteString(styleMuted.Render("p — set/replace password   d — disable password\n"))
-		b.WriteString(styleMuted.Render("a — add key   r — remove key\n"))
-		b.WriteString(styleMuted.Render("Enter — next   Esc — back") + "\n")
+		b.WriteString(styleMuted.Render("p Set/replace password   d Disable password\n"))
+		b.WriteString(styleMuted.Render("a Add key   r Remove key\n"))
+		b.WriteString(styleMuted.Render("Enter Continue   Esc Back") + "\n")
 	}
 
 	if m.authError != "" {
@@ -149,6 +151,7 @@ func (m Model) viewAuth() string {
 func (m Model) viewDocker() string {
 	var b strings.Builder
 	b.WriteString(styleBold.Render("Docker Settings") + "\n\n")
+	b.WriteString(styleMuted.Render("Select the Docker daemon endpoint. Leave empty to use Docker's environment defaults.") + "\n\n")
 	b.WriteString(renderField(m.dockerFields[fieldDockerEndpoint], true))
 	b.WriteString("\n\n")
 	b.WriteString(styleMuted.Render("Enter — next   Esc — back"))
@@ -160,6 +163,7 @@ func (m Model) viewDocker() string {
 func (m Model) viewCompose() string {
 	var b strings.Builder
 	b.WriteString(styleBold.Render("Compose Roots") + "\n\n")
+	b.WriteString(styleMuted.Render("Allowed folders for Compose files; the first root is the managed-project default.") + "\n\n")
 
 	if len(m.composeRoots) == 0 {
 		b.WriteString(styleWarning.Render("  (no roots configured)") + "\n")
@@ -191,6 +195,7 @@ func (m Model) viewCompose() string {
 func (m Model) viewReview() string {
 	var b strings.Builder
 	b.WriteString(styleBold.Render("Review & Save") + "\n\n")
+	b.WriteString(styleMuted.Render("Check the redacted settings, then save them to the private server configuration file.") + "\n\n")
 
 	b.WriteString(styleBox.Render(m.renderSummary()))
 	b.WriteString("\n\n")
