@@ -14,6 +14,7 @@ import (
 	backendnetworks "github.com/petar030/ssh-native-docker-tui/internal/backend/networks"
 	backendsystem "github.com/petar030/ssh-native-docker-tui/internal/backend/system"
 	backendvolumes "github.com/petar030/ssh-native-docker-tui/internal/backend/volumes"
+	"github.com/petar030/ssh-native-docker-tui/internal/serverconfig"
 )
 
 type testBackend struct{}
@@ -38,20 +39,68 @@ func (subscription testSubscription) Events() <-chan backend.EventEnvelope {
 }
 func (testSubscription) Close() error { return nil }
 
-func TestNewRequiresBackendAndLoopbackAddress(t *testing.T) {
+func validHash(t *testing.T, password string) string {
+	t.Helper()
+	hash, err := serverconfig.HashPassword(password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hash
+}
+
+// --- Basic construction ---
+
+func TestNewRequiresBackend(t *testing.T) {
 	if _, err := New(Config{}); err == nil || !strings.Contains(err.Error(), "backend is required") {
 		t.Fatalf("missing backend error = %v", err)
 	}
+}
 
+func TestNewRejectsPublicAddressWithoutAuth(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "host-key")
-	if _, err := New(Config{Address: "0.0.0.0:2222", HostKeyPath: path, Backend: testBackend{}}); err == nil ||
-		!strings.Contains(err.Error(), "authentication is not implemented") {
-		t.Fatalf("public address error = %v", err)
+	if _, err := New(Config{
+		Address:     "0.0.0.0:2222",
+		HostKeyPath: path,
+		Backend:     testBackend{},
+	}); err == nil || !strings.Contains(err.Error(), "authentication method") {
+		t.Fatalf("expected auth-required error, got %v", err)
 	}
+	// Host key must not have been created for a rejected config.
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("host key was created for rejected configuration: %v", err)
+		t.Fatal("host key was created for rejected configuration")
 	}
 }
+
+func TestNewAcceptsPublicAddressWithPasswordAuth(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "host-key")
+	server, err := New(Config{
+		Address:     "127.0.0.1:0",
+		HostKeyPath: path,
+		Backend:     testBackend{},
+		Auth:        serverconfig.AuthConfig{PasswordHash: validHash(t, "pass")},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_ = server.Close()
+}
+
+func TestNewAcceptsPublicAddressWithKeyAuth(t *testing.T) {
+	const pubKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl test"
+	path := filepath.Join(t.TempDir(), "host-key")
+	server, err := New(Config{
+		Address:     "127.0.0.1:0",
+		HostKeyPath: path,
+		Backend:     testBackend{},
+		Auth:        serverconfig.AuthConfig{AuthorizedKeys: []string{pubKey}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_ = server.Close()
+}
+
+// --- Loopback with no auth (first-run development behavior) ---
 
 func TestNewCreatesPersistentHostKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "host_ed25519")
@@ -86,15 +135,38 @@ func TestNewCreatesPersistentHostKey(t *testing.T) {
 	}
 }
 
-func TestRequireLoopback(t *testing.T) {
-	for _, address := range []string{"localhost:22", "127.0.0.1:22", "[::1]:22"} {
-		if err := requireLoopback(address); err != nil {
-			t.Fatalf("requireLoopback(%q): %v", address, err)
+// --- requireLoopbackOrAuth ---
+
+func TestRequireLoopbackOrAuthAcceptsLoopback(t *testing.T) {
+	noAuth := serverconfig.AuthConfig{}
+	for _, addr := range []string{"localhost:22", "127.0.0.1:22", "[::1]:22"} {
+		if err := requireLoopbackOrAuth(addr, noAuth); err != nil {
+			t.Fatalf("requireLoopbackOrAuth(%q) with no auth: %v", addr, err)
 		}
 	}
-	for _, address := range []string{"bad", ":22", "192.0.2.1:22"} {
-		if err := requireLoopback(address); err == nil {
-			t.Fatalf("requireLoopback(%q) accepted non-loopback address", address)
+}
+
+func TestRequireLoopbackOrAuthRejectsNonLoopbackWithoutAuth(t *testing.T) {
+	noAuth := serverconfig.AuthConfig{}
+	for _, addr := range []string{"0.0.0.0:22", "192.0.2.1:22"} {
+		if err := requireLoopbackOrAuth(addr, noAuth); err == nil {
+			t.Fatalf("requireLoopbackOrAuth(%q) with no auth should fail", addr)
 		}
+	}
+}
+
+func TestRequireLoopbackOrAuthAcceptsNonLoopbackWithAuth(t *testing.T) {
+	auth := serverconfig.AuthConfig{PasswordHash: validHash(t, "pw")}
+	if err := requireLoopbackOrAuth("0.0.0.0:22", auth); err != nil {
+		t.Fatalf("requireLoopbackOrAuth with auth: %v", err)
+	}
+}
+
+func TestRequireLoopbackOrAuthRejectsBadAddress(t *testing.T) {
+	if err := requireLoopbackOrAuth("bad", serverconfig.AuthConfig{}); err == nil {
+		t.Fatal("expected error for bad address")
+	}
+	if err := requireLoopbackOrAuth(":22", serverconfig.AuthConfig{}); err == nil {
+		t.Fatal("expected error for empty host")
 	}
 }

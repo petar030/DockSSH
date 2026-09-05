@@ -15,6 +15,7 @@ import (
 	"charm.land/wish/v2"
 	"charm.land/wish/v2/activeterm"
 	"charm.land/wish/v2/bubbletea"
+	"github.com/petar030/ssh-native-docker-tui/internal/serverconfig"
 	"github.com/petar030/ssh-native-docker-tui/internal/tui"
 )
 
@@ -23,10 +24,16 @@ const (
 	DefaultHostKeyPath = ".ssh-docker-tui/host_ed25519"
 )
 
+// Config holds the SSH server configuration.
+//
+// Auth carries the validated authentication settings loaded from
+// serverconfig.Config.  When Auth.HasAnyAuth() is false the server may only
+// bind to a loopback address (first-run development behavior).
 type Config struct {
 	Address     string
 	HostKeyPath string
 	Backend     tui.Application
+	Auth        serverconfig.AuthConfig
 }
 
 type Server struct {
@@ -41,17 +48,20 @@ func New(config Config) (*Server, error) {
 	if strings.TrimSpace(config.Address) == "" {
 		config.Address = DefaultAddress
 	}
-	if err := requireLoopback(config.Address); err != nil {
-		return nil, err
-	}
 	if strings.TrimSpace(config.HostKeyPath) == "" {
 		config.HostKeyPath = DefaultHostKeyPath
 	}
+
+	// Validate listener/auth combination before touching the filesystem.
+	if err := requireLoopbackOrAuth(config.Address, config.Auth); err != nil {
+		return nil, err
+	}
+
 	if err := ensureKeyDirectory(config.HostKeyPath); err != nil {
 		return nil, err
 	}
 
-	server, err := wish.NewServer(
+	opts := []ssh.Option{
 		wish.WithAddress(config.Address),
 		wish.WithHostKeyPath(config.HostKeyPath),
 		wish.WithMiddleware(
@@ -60,7 +70,28 @@ func New(config Config) (*Server, error) {
 			}),
 			activeterm.Middleware(),
 		),
-	)
+	}
+
+	// Install authentication handlers only when those mechanisms are configured.
+	if config.Auth.HasPasswordAuth() {
+		hash := config.Auth.PasswordHash // capture for closure
+		opts = append(opts, wish.WithPasswordAuth(func(_ ssh.Context, password string) bool {
+			return serverconfig.VerifyPassword(hash, password)
+		}))
+	}
+	if config.Auth.HasKeyAuth() {
+		keys := config.Auth.AuthorizedKeys // capture for closure
+		opts = append(opts, wish.WithPublicKeyAuth(func(_ ssh.Context, key ssh.PublicKey) bool {
+			for _, stored := range keys {
+				if serverconfig.AuthorizedKeyMatches(stored, key) {
+					return true
+				}
+			}
+			return false
+		}))
+	}
+
+	server, err := wish.NewServer(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("create SSH server: %w", err)
 	}
@@ -85,19 +116,32 @@ func (server *Server) Close() error {
 	return nil
 }
 
-func requireLoopback(address string) error {
+// requireLoopbackOrAuth enforces the compatibility policy:
+//   - loopback address with or without auth: accepted
+//   - non-loopback address with at least one auth method: accepted
+//   - non-loopback address with no auth: rejected
+func requireLoopbackOrAuth(address string, auth serverconfig.AuthConfig) error {
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
 		return fmt.Errorf("validate SSH listen address %q: %w", address, err)
 	}
-	if strings.EqualFold(host, "localhost") {
+	if isLoopbackHost(host) {
 		return nil
 	}
-	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		return fmt.Errorf("validate SSH listen address %q: authentication is not implemented; use a loopback host", address)
+	if !auth.HasAnyAuth() {
+		return fmt.Errorf(
+			"validate SSH listen address %q: a non-loopback address requires at least one authentication method",
+			address)
 	}
 	return nil
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func ensureKeyDirectory(path string) error {
