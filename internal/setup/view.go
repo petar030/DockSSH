@@ -67,7 +67,7 @@ func (m Model) renderHeader() string {
 			tabs[i] = styleMuted.Render(label)
 		}
 	}
-	return title + "\n" + strings.Join(tabs, styleMuted.Render("│"))
+	return title + "\n\n" + strings.Join(tabs, styleMuted.Render("│"))
 }
 
 // --- Server screen ---
@@ -123,27 +123,38 @@ func (m Model) viewAuth() string {
 		b.WriteString(styleMuted.Render(serverconfig.PasswordPolicyDescription()) + "\n")
 		b.WriteString(renderPasswordField("Password:        ", strings.Repeat("•", len(m.passwordInput)), !m.passwordCursor) + "\n")
 		b.WriteString(renderPasswordField("Confirm password:", strings.Repeat("•", len(m.passwordConfirm)), m.passwordCursor) + "\n")
-		b.WriteString(styleMuted.Render("Tab — switch field   Enter — confirm   Esc — cancel") + "\n")
+		b.WriteString("\n" + commandLine("Tab", "Switch field") + "\n")
+		b.WriteString(commandLine("Enter", "Confirm") + "\n")
+		b.WriteString(commandLine("Esc", "Cancel") + "\n")
 
 	case authActionAddKey:
 		b.WriteString(stylePrimary.Render("Paste SSH public key (authorized_keys format):") + "\n")
 		b.WriteString("> " + m.newKeyInput + "█\n")
-		b.WriteString(styleMuted.Render("Enter — add   Esc — cancel") + "\n")
+		b.WriteString("\n" + commandLine("Enter", "Add key") + "\n")
+		b.WriteString(commandLine("Esc", "Cancel") + "\n")
 
 	case authActionRemoveKey:
 		b.WriteString(stylePrimary.Render("Select key to remove (↑/↓ then Enter):") + "\n")
-		b.WriteString(styleMuted.Render("Enter — remove   Esc — cancel") + "\n")
+		b.WriteString("\n" + commandLine("Enter", "Remove key") + "\n")
+		b.WriteString(commandLine("Esc", "Cancel") + "\n")
 
 	default:
-		b.WriteString(styleMuted.Render("p Set/replace password   d Disable password\n"))
-		b.WriteString(styleMuted.Render("a Add key   r Remove key\n"))
-		b.WriteString(styleMuted.Render("Enter Continue   Esc Back") + "\n")
+		b.WriteString(commandLine("p", "Set/replace password") + "\n")
+		b.WriteString(commandLine("d", "Disable password") + "\n")
+		b.WriteString(commandLine("a", "Add key") + "\n")
+		b.WriteString(commandLine("r", "Remove key") + "\n")
+		b.WriteString(commandLine("Enter", "Continue") + "\n")
+		b.WriteString(commandLine("Esc", "Back") + "\n")
 	}
 
 	if m.authError != "" {
 		b.WriteString("\n" + styleDanger.Render("✕ "+m.authError) + "\n")
 	}
 	return b.String()
+}
+
+func commandLine(key, description string) string {
+	return "  " + stylePrimary.Bold(true).Render(fmt.Sprintf("%-5s", key)) + styleMuted.Render(description)
 }
 
 // --- Docker screen ---
