@@ -218,22 +218,22 @@ This is a separate follow-up slice. It must not be folded into Slice 3 because
 it adds backend behavior for creating, editing, validating, storing, and then
 running Compose configuration files.
 
-- [ ] Add a Compose configuration editor using Bubble Tea's text-area
+- [x] Add a Compose configuration editor using Bubble Tea's text-area
       component, with YAML text editing and a preconfigured starter template
-- [ ] Add client-side YAML/syntax validation before any backend request is sent;
+- [x] Add client-side YAML/syntax validation before any backend request is sent;
       keep the editor open and show a bounded, sanitized validation error
-- [ ] Add backend contracts and implementation for safely creating a new
+- [x] Add backend contracts and implementation for safely creating a new
       Compose file and editing an existing file beneath configured Compose
       roots, using `<ComposeRoot>/<project>/compose.yaml` by default in the
       first iteration, with path and write validation
-- [ ] Add an explicit save/create request separate from `Up`, so the backend
+- [x] Add an explicit save/create request separate from `Up`, so the backend
       never receives partially edited or syntactically invalid content
-- [ ] Run the saved configuration through the existing Compose `ProjectSpec`
+- [x] Run the saved configuration through the existing Compose `ProjectSpec`
       and job pipeline, preserving the existing path-safety and job rules
-- [ ] Test template creation, valid and invalid YAML, path traversal,
+- [x] Test template creation, valid and invalid YAML, path traversal,
       permission/write failures, replacement editing, concurrent sessions, and
       running a newly created project
-- [ ] Manually verify creation and editing only with disposable Compose files
+- [x] Manually verify creation and editing only with disposable Compose files
       inside an allowed root; leave unrelated files unchanged
 
 ## TUI Slice 4: Images page

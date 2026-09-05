@@ -16,6 +16,12 @@ TUI page API call
 
 Caller cancellation before acceptance can prevent submission. After acceptance it stops only that caller's wait; a buffered result channel lets the worker finish without the session. Queue overflow is reported as conflict/busy. Docker/Compose resolves resource-level concurrency.
 
+Compose `SaveConfig` is also a short command. Its callback writes one validated
+managed file and never starts a Compose project. With several accepted saves
+for the same project, atomic replacement guarantees complete files and the
+last worker to rename wins; short commands intentionally have no per-project
+lock. Starting the saved definition remains a separate `Up` job.
+
 ## Long jobs
 
 Compose up/down/pull/build and image pull are jobs. They start immediately in their own backend-owned goroutine when capacity is available; there is no job queue. The default maximum is four active jobs.

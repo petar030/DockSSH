@@ -71,6 +71,28 @@ func (api *API) Scale(ctx context.Context, project ProjectSpec, options ScaleOpt
 	return api.commands.Run(ctx, request)
 }
 
+// SaveConfig atomically creates or replaces the managed default Compose file
+// through the shared short-command executor. Saving does not start a project.
+func (api *API) SaveConfig(ctx context.Context, options SaveConfigOptions) (backend.CommandResult, error) {
+	request, err := api.saveConfigRequest(options)
+	if err != nil {
+		return backend.CommandResult{}, err
+	}
+	return api.commands.Run(ctx, request)
+}
+
+// ReadConfig reads one managed default Compose file. The project name, rather
+// than an arbitrary path, selects <first root>/<project>/compose.yaml.
+func (api *API) ReadConfig(ctx context.Context, projectName string) (ConfigDocument, error) {
+	return api.readConfig(ctx, projectName)
+}
+
+// ConfigPath returns the deterministic managed path without creating it.
+func (api *API) ConfigPath(projectName string) (string, error) {
+	_, path, err := api.managedConfigPath(projectName)
+	return path, err
+}
+
 // Logs opens a session-owned Compose log stream.
 func (api *API) Logs(ctx context.Context, projectName string, options LogsOptions) (backend.Stream[LogEntry], error) {
 	return api.logs(ctx, projectName, options)

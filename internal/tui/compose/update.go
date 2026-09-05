@@ -9,9 +9,16 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/compose-spec/compose-go/v2/schema"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
 	backendcompose "github.com/petar030/ssh-native-docker-tui/internal/backend/compose"
+	"go.yaml.in/yaml/v4"
 )
+
+const starterConfig = `services:
+  app:
+    image: nginx:latest
+`
 
 type subscriptionReadyMsg struct {
 	generation   uint64
@@ -38,6 +45,21 @@ type jobStartedMsg struct {
 	operation  overlayMode
 	job        backend.Job
 	err        error
+}
+type configPathReadyMsg struct {
+	generation, editorGeneration uint64
+	project, path                string
+	err                          error
+}
+type configLoadedMsg struct {
+	generation, editorGeneration uint64
+	document                     backendcompose.ConfigDocument
+	err                          error
+}
+type configSavedMsg struct {
+	generation, editorGeneration uint64
+	project, path                string
+	err                          error
 }
 
 func subscribe(ctx context.Context, common Backend, generation uint64) tea.Cmd {
@@ -162,7 +184,48 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 		}
 	case logOpenedMsg, logValueMsg, logDoneMsg:
 		return m.handleLogMessage(message)
+	case configPathReadyMsg:
+		if !m.currentEditor(message.generation, message.editorGeneration) {
+			return m, nil
+		}
+		m.pending = false
+		if message.err != nil {
+			m.notice = configErrorText("Create configuration", message.err)
+			m.overlay = newConfigOverlay
+			return m, nil
+		}
+		return m.openConfigEditor(message.project, message.path, starterConfig)
+	case configLoadedMsg:
+		if !m.currentEditor(message.generation, message.editorGeneration) {
+			return m, nil
+		}
+		m.pending = false
+		if message.err != nil {
+			m.notice = configErrorText("Edit configuration", message.err)
+			return m, nil
+		}
+		return m.openConfigEditor(message.document.ProjectName, message.document.Path, message.document.Content)
+	case configSavedMsg:
+		if !m.currentEditor(message.generation, message.editorGeneration) {
+			return m, nil
+		}
+		m.pending = false
+		if message.err != nil {
+			m.notice = configErrorText("Save configuration", message.err)
+			m.overlay = configEditorOverlay
+			return m, nil
+		}
+		m.editor.Blur()
+		m.overlay, m.notice, m.formProject = upOverlay, "", message.project
+		m.field, m.fields, m.optionA, m.optionB = 0, [4]string{}, false, false
+		m.fields[0] = message.path
+		return m, nil
 	default:
+		if m.overlay == configEditorOverlay && !m.pending {
+			var command tea.Cmd
+			m.editor, command = m.editor.Update(message)
+			return m, command
+		}
 		if m.loading || m.pending {
 			var command tea.Cmd
 			m.spinner, command = m.spinner.Update(message)
@@ -216,6 +279,9 @@ func (m Model) handleKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.pending {
 		return m, nil
 	}
+	if m.overlay == configEditorOverlay {
+		return m.handleConfigEditor(key)
+	}
 	if m.overlay == logsOverlay {
 		return m.handleLogKey(value)
 	}
@@ -233,6 +299,10 @@ func (m Model) handleKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.detailScroll = min(m.detailScroll+m.detailRows(), m.detailMaxScroll())
 	case "f":
 		m.filterEdit, m.overlay = m.filter, filterOverlay
+	case "n":
+		m.overlay, m.field, m.fields, m.notice = newConfigOverlay, 0, [4]string{}, ""
+	case "E":
+		return m.loadConfig()
 	case "i", "enter":
 		return m.loadDetails()
 	case "s":
@@ -274,6 +344,7 @@ func (m *Model) openOverlay(mode overlayMode) {
 		return
 	}
 	m.overlay, m.field, m.fields, m.optionA, m.optionB, m.notice = mode, 0, [4]string{}, false, false, ""
+	m.formProject = m.selected
 	if mode == upOverlay || mode == pullOverlay || mode == buildOverlay || mode == scaleOverlay {
 		m.fields[0] = strings.Join(m.projectConfigFiles(), ",")
 	}
@@ -297,6 +368,17 @@ func (m Model) handleOverlay(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			if key.Key().Text != "" {
 				m.filterEdit += key.Key().Text
 			}
+		}
+		return m, nil
+	}
+	if m.overlay == newConfigOverlay {
+		if value == "enter" {
+			return m.prepareNewConfig()
+		}
+		if value == "backspace" {
+			m.fields[0] = trim(m.fields[0])
+		} else if key.Key().Text != "" {
+			m.fields[0] += key.Key().Text
 		}
 		return m, nil
 	}
@@ -454,10 +536,14 @@ func (m Model) projectConfigFiles() []string {
 
 func (m Model) projectSpec(files, profiles string) (backendcompose.ProjectSpec, error) {
 	configFiles := csv(files)
-	if strings.TrimSpace(m.selected) == "" || len(configFiles) == 0 {
+	projectName := strings.TrimSpace(m.formProject)
+	if projectName == "" {
+		projectName = strings.TrimSpace(m.selected)
+	}
+	if projectName == "" || len(configFiles) == 0 {
 		return backendcompose.ProjectSpec{}, fmt.Errorf("Project and at least one Compose file are required")
 	}
-	return backendcompose.ProjectSpec{Name: m.selected, ConfigFiles: configFiles, Profiles: csv(profiles)}, nil
+	return backendcompose.ProjectSpec{Name: projectName, ConfigFiles: configFiles, Profiles: csv(profiles)}, nil
 }
 
 func (m Model) fieldCount() int {
@@ -469,6 +555,98 @@ func (m Model) fieldCount() int {
 	default:
 		return 1
 	}
+}
+
+func (m Model) prepareNewConfig() (Model, tea.Cmd) {
+	project := strings.TrimSpace(m.fields[0])
+	if project == "" || m.api == nil {
+		return m.refuse("A project name is required")
+	}
+	m.pending, m.notice = true, ""
+	m.editorGeneration++
+	generation, editorGeneration, api := m.generation, m.editorGeneration, m.api
+	return m, tea.Batch(func() tea.Msg {
+		path, err := api.ConfigPath(project)
+		return configPathReadyMsg{generation: generation, editorGeneration: editorGeneration, project: project, path: path, err: err}
+	}, m.spinner.Tick)
+}
+
+func (m Model) loadConfig() (Model, tea.Cmd) {
+	if m.selected == "" || m.api == nil {
+		return m, nil
+	}
+	m.pending, m.notice = true, ""
+	m.editorGeneration++
+	generation, editorGeneration, project, ctx, api := m.generation, m.editorGeneration, m.selected, m.pageCtx, m.api
+	return m, tea.Batch(func() tea.Msg {
+		document, err := api.ReadConfig(ctx, project)
+		return configLoadedMsg{generation: generation, editorGeneration: editorGeneration, document: document, err: err}
+	}, m.spinner.Tick)
+}
+
+func (m Model) openConfigEditor(project, path, content string) (Model, tea.Cmd) {
+	m.editorProject, m.editorPath, m.notice, m.overlay = project, path, "", configEditorOverlay
+	m.editor.SetValue(content)
+	m.editor.SetWidth(max(min(m.width-16, 112), 20))
+	m.editor.SetHeight(max(min(m.height-12, 28), 6))
+	command := m.editor.Focus()
+	return m, command
+}
+
+func (m Model) handleConfigEditor(key tea.KeyPressMsg) (Model, tea.Cmd) {
+	switch key.String() {
+	case "esc":
+		m.editor.Blur()
+		m.overlay, m.notice = noOverlay, ""
+		return m, nil
+	case "ctrl+s":
+		return m.saveConfig()
+	default:
+		var command tea.Cmd
+		m.editor, command = m.editor.Update(key)
+		return m, command
+	}
+}
+
+func (m Model) saveConfig() (Model, tea.Cmd) {
+	project, path, content := m.editorProject, m.editorPath, m.editor.Value()
+	if project == "" || path == "" || m.api == nil {
+		return m.refuse("The managed configuration target is unavailable")
+	}
+	m.pending, m.notice = true, ""
+	generation, editorGeneration, ctx, api := m.generation, m.editorGeneration, m.pageCtx, m.api
+	return m, tea.Batch(func() tea.Msg {
+		if err := validateEditorConfig(content); err != nil {
+			return configSavedMsg{generation: generation, editorGeneration: editorGeneration, project: project, path: path, err: err}
+		}
+		_, err := api.SaveConfig(ctx, backendcompose.SaveConfigOptions{ProjectName: project, Content: content})
+		return configSavedMsg{generation: generation, editorGeneration: editorGeneration, project: project, path: path, err: err}
+	}, m.spinner.Tick)
+}
+
+func (m Model) currentEditor(generation, editorGeneration uint64) bool {
+	return m.current(generation) && m.editorGeneration == editorGeneration
+}
+
+func validateEditorConfig(content string) error {
+	if strings.TrimSpace(content) == "" || len(content) > maxEditorBytes {
+		return fmt.Errorf("Compose YAML must contain between 1 byte and 1 MiB")
+	}
+	var document map[string]any
+	if err := yaml.Unmarshal([]byte(content), &document); err != nil {
+		return fmt.Errorf("Compose YAML syntax: %w", err)
+	}
+	if err := schema.Validate(document); err != nil {
+		return fmt.Errorf("Compose schema: %w", err)
+	}
+	return nil
+}
+
+func configErrorText(operation string, err error) string {
+	if err == nil {
+		return ""
+	}
+	return operation + " failed: " + err.Error()
 }
 
 func (m Model) refuse(value string) (Model, tea.Cmd) { m.notice = value; return m, nil }

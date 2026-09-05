@@ -9,12 +9,16 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
 	backendcompose "github.com/petar030/ssh-native-docker-tui/internal/backend/compose"
 )
 
-const maxLogLines = 2000
+const (
+	maxLogLines    = 2000
+	maxEditorBytes = 1 << 20
+)
 
 type Backend interface {
 	RequestRefresh(backend.Page) error
@@ -34,6 +38,9 @@ type API interface {
 	Pull(context.Context, backendcompose.ProjectSpec, backendcompose.PullOptions) (backend.Job, error)
 	Build(context.Context, backendcompose.ProjectSpec, backendcompose.BuildOptions) (backend.Job, error)
 	Logs(context.Context, string, backendcompose.LogsOptions) (backend.Stream[backendcompose.LogEntry], error)
+	ConfigPath(string) (string, error)
+	ReadConfig(context.Context, string) (backendcompose.ConfigDocument, error)
+	SaveConfig(context.Context, backendcompose.SaveConfigOptions) (backend.CommandResult, error)
 }
 
 type JobTracker interface {
@@ -59,6 +66,8 @@ const (
 	pullOverlay
 	buildOverlay
 	logsOverlay
+	newConfigOverlay
+	configEditorOverlay
 )
 
 type Model struct {
@@ -88,13 +97,19 @@ type Model struct {
 	targetLoading           bool
 	targetErr               error
 
-	overlay overlayMode
-	field   int
-	fields  [4]string
-	optionA bool
-	optionB bool
-	pending bool
-	notice  string
+	overlay     overlayMode
+	field       int
+	fields      [4]string
+	formProject string
+	optionA     bool
+	optionB     bool
+	pending     bool
+	notice      string
+
+	editor           textarea.Model
+	editorProject    string
+	editorPath       string
+	editorGeneration uint64
 
 	streamGen    uint64
 	streamCancel context.CancelFunc
@@ -110,7 +125,13 @@ func New(ctx context.Context, common Backend, api API, jobs JobTracker) Model {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return Model{backend: common, api: api, jobs: jobs, session: ctx, spinner: spinner.New(spinner.WithSpinner(spinner.Dot))}
+	editor := textarea.New()
+	editor.Prompt = ""
+	editor.ShowLineNumbers = true
+	editor.CharLimit = maxEditorBytes
+	editor.MaxHeight = 40
+	editor.MaxContentHeight = 10000
+	return Model{backend: common, api: api, jobs: jobs, session: ctx, spinner: spinner.New(spinner.WithSpinner(spinner.Dot)), editor: editor}
 }
 
 func (m Model) Activate() (Model, tea.Cmd) {
@@ -131,6 +152,7 @@ func (m Model) Deactivate() Model {
 	}
 	m.cancel, m.pageCtx, m.subscription = nil, nil, nil
 	m.active, m.loading, m.overlay, m.pending = false, false, noOverlay, false
+	m.editor.Blur()
 	return m
 }
 
@@ -144,6 +166,8 @@ func (m Model) Refresh() (Model, tea.Cmd) {
 
 func (m Model) SetSize(width, height int) Model {
 	m.width, m.height = max(width, 0), max(height, 0)
+	m.editor.SetWidth(max(min(m.width-16, 112), 20))
+	m.editor.SetHeight(max(min(m.height-12, 28), 6))
 	m.ensureVisible()
 	m.detailScroll = min(m.detailScroll, m.detailMaxScroll())
 	return m
@@ -161,10 +185,13 @@ func (m Model) Help() string {
 	if m.overlay == logsOverlay {
 		return "j/k scroll │ g/G top/bottom │ esc close logs"
 	}
+	if m.overlay == configEditorOverlay {
+		return "ctrl+s save │ esc cancel │ arrows/pgup/pgdn move │ ctrl+v paste"
+	}
 	if m.overlay != noOverlay {
 		return "tab next field │ enter submit │ esc cancel"
 	}
-	return "↑↓ Move │ pgup/pgdn Details │ f Filter │ s Start │ x Stop │ e Restart │ p/P Pause/Unpause │ c Scale │ u Up │ d Down │ o Pull │ b Build │ l Logs"
+	return "↑↓ Move │ pgup/pgdn Details │ f Filter │ n New config │ E Edit config │ s Start │ x Stop │ e Restart │ p/P Pause/Unpause │ c Scale │ u Up │ d Down │ o Pull │ b Build │ l Logs"
 }
 func (m Model) Status() string {
 	if m.notice != "" {

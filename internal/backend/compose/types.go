@@ -24,6 +24,20 @@ type ProjectSpec struct {
 	Profiles    []string
 }
 
+// SaveConfigOptions is the complete caller input for a managed Compose file.
+// The backend derives the path; callers cannot choose an arbitrary filename.
+type SaveConfigOptions struct {
+	ProjectName string
+	Content     string
+}
+
+// ConfigDocument is one managed default Compose file returned as plain text.
+type ConfigDocument struct {
+	ProjectName string
+	Path        string
+	Content     string
+}
+
 type ProjectSummary struct {
 	Name        string
 	Status      string

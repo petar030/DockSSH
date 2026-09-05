@@ -31,20 +31,23 @@ func (s *fakeSubscription) Events() <-chan backend.EventEnvelope { return s.even
 func (s *fakeSubscription) Close() error                         { s.closed = true; return nil }
 
 type fakeAPI struct {
-	details  []string
-	commands []string
-	service  backendcompose.ServiceOptions
-	stop     backendcompose.StopOptions
-	restart  backendcompose.RestartOptions
-	scale    backendcompose.ScaleOptions
-	spec     backendcompose.ProjectSpec
-	up       backendcompose.UpOptions
-	down     backendcompose.DownOptions
-	pull     backendcompose.PullOptions
-	build    backendcompose.BuildOptions
-	job      backend.Job
-	stream   backend.Stream[backendcompose.LogEntry]
-	err      error
+	details    []string
+	commands   []string
+	service    backendcompose.ServiceOptions
+	stop       backendcompose.StopOptions
+	restart    backendcompose.RestartOptions
+	scale      backendcompose.ScaleOptions
+	spec       backendcompose.ProjectSpec
+	up         backendcompose.UpOptions
+	down       backendcompose.DownOptions
+	pull       backendcompose.PullOptions
+	build      backendcompose.BuildOptions
+	job        backend.Job
+	stream     backend.Stream[backendcompose.LogEntry]
+	configPath string
+	config     backendcompose.ConfigDocument
+	saved      backendcompose.SaveConfigOptions
+	err        error
 }
 
 func (f *fakeAPI) RequestDetails(name string) error {
@@ -96,6 +99,14 @@ func (f *fakeAPI) Build(_ context.Context, spec backendcompose.ProjectSpec, opti
 }
 func (f *fakeAPI) Logs(context.Context, string, backendcompose.LogsOptions) (backend.Stream[backendcompose.LogEntry], error) {
 	return f.stream, f.err
+}
+func (f *fakeAPI) ConfigPath(string) (string, error) { return f.configPath, f.err }
+func (f *fakeAPI) ReadConfig(context.Context, string) (backendcompose.ConfigDocument, error) {
+	return f.config, f.err
+}
+func (f *fakeAPI) SaveConfig(_ context.Context, options backendcompose.SaveConfigOptions) (backend.CommandResult, error) {
+	f.saved = options
+	return backend.CommandResult{}, f.err
 }
 
 type fakeTracker struct {
@@ -282,3 +293,88 @@ func TestLogsAssembleFragmentsByContainer(t *testing.T) {
 		t.Fatalf("fragment assembly mixed containers:\n%s", joined)
 	}
 }
+
+func TestNewConfigEditorValidatesThenSavesWithoutStartingProject(t *testing.T) {
+	m, _, api := activeModel(t)
+	api.configPath = "/allowed/new-project/compose.yaml"
+	m, _ = m.handleKey(key("n"))
+	m.fields[0] = "new-project"
+	m, command := m.handleOverlay(key("enter"))
+	if !m.pending || !m.CapturesInput() {
+		t.Fatal("managed-path request did not block page input")
+	}
+	m, _ = m.Update(firstMessage(command))
+	m = m.SetSize(120, 30)
+	if m.overlay != configEditorOverlay || m.editorProject != "new-project" || m.editorPath != api.configPath {
+		t.Fatalf("editor target = %q %q overlay=%v", m.editorProject, m.editorPath, m.overlay)
+	}
+	if m.editor.Value() != starterConfig || !strings.Contains(m.View(), "/allowed/new-project/") {
+		t.Fatalf("new editor lacks its template or derived target: value=%q\n%s", m.editor.Value(), m.View())
+	}
+
+	m.editor.SetValue("services: [")
+	invalidContent := m.editor.Value()
+	m, command = m.saveConfig()
+	m, _ = m.Update(firstMessage(command))
+	if api.saved.ProjectName != "" || m.overlay != configEditorOverlay || m.editor.Value() != invalidContent || !strings.Contains(m.notice, "syntax") {
+		t.Fatalf("invalid save reached API or lost editor: saved=%+v notice=%q", api.saved, m.notice)
+	}
+
+	m.editor.SetValue(starterConfig)
+	m, command = m.saveConfig()
+	m, _ = m.Update(firstMessage(command))
+	if api.saved.ProjectName != "new-project" || api.saved.Content != starterConfig {
+		t.Fatalf("save options = %+v", api.saved)
+	}
+	if m.overlay != upOverlay || m.formProject != "new-project" || m.fields[0] != api.configPath {
+		t.Fatalf("post-save Up form = overlay %v project %q fields=%v", m.overlay, m.formProject, m.fields)
+	}
+	if api.job != nil {
+		t.Fatal("saving automatically started a Compose job")
+	}
+
+	api.job = &fakeJob{id: "compose.up-new"}
+	m.jobs = &fakeTracker{jobs: map[string]bool{}}
+	m, command = m.submitOverlay()
+	m, _ = m.Update(firstMessage(command))
+	if api.spec.Name != "new-project" || len(api.spec.ConfigFiles) != 1 || api.spec.ConfigFiles[0] != api.configPath {
+		t.Fatalf("saved ProjectSpec = %+v", api.spec)
+	}
+}
+
+func TestEditConfigLoadsOnlyManagedDocumentAndRejectsLateResult(t *testing.T) {
+	m, _, api := activeModel(t)
+	m.selected = "demo"
+	api.config = backendcompose.ConfigDocument{
+		ProjectName: "demo", Path: "/allowed/demo/compose.yaml", Content: validEditorConfig,
+	}
+	m, command := m.loadConfig()
+	message := firstMessage(command)
+	m.editorGeneration++
+	m, _ = m.Update(message)
+	if m.overlay == configEditorOverlay {
+		t.Fatal("late config read replaced a newer editor generation")
+	}
+
+	m, command = m.loadConfig()
+	m, _ = m.Update(firstMessage(command))
+	if m.overlay != configEditorOverlay || m.editor.Value() != validEditorConfig || m.editorPath != api.config.Path {
+		t.Fatalf("loaded editor = overlay %v path %q value %q", m.overlay, m.editorPath, m.editor.Value())
+	}
+	if strings.Contains(m.overlayView(), "Path:") && strings.Contains(m.overlayView(), "_") {
+		t.Fatal("editor exposed an editable arbitrary path field")
+	}
+}
+
+func TestConfigSaveFailureKeepsContentAndEditor(t *testing.T) {
+	m, _, api := activeModel(t)
+	m, _ = m.openConfigEditor("demo", "/allowed/demo/compose.yaml", validEditorConfig)
+	api.err = &backend.AppError{Code: backend.ErrorPermissionDenied, Operation: "save Compose configuration"}
+	m, command := m.saveConfig()
+	m, _ = m.Update(firstMessage(command))
+	if m.overlay != configEditorOverlay || m.editor.Value() != validEditorConfig || !strings.Contains(m.notice, "failed") {
+		t.Fatalf("failed editor state = overlay %v content %q notice %q", m.overlay, m.editor.Value(), m.notice)
+	}
+}
+
+const validEditorConfig = "services:\n  app:\n    image: nginx:latest\n"

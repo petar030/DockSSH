@@ -219,6 +219,16 @@ independent while both sessions receive authoritative Compose updates. Test an
 out-of-root file path and confirm it is rejected. Afterwards, remove only the
 explicit disposable project with its exact project name and configuration.
 
+For the Compose editor follow-up, press `n`, enter a strict lowercase project
+name, and confirm the displayed target is exactly
+`<first compose root>/<project>/compose.yaml`. Invalid YAML must stay editable
+and create no file. Save the template with `ctrl+s`, verify mode `0600`, then
+explicitly accept the prefilled Up form and confirm the project becomes active.
+Press `E` to load and replace that same managed file. Two sessions may edit the
+same project: saves are atomic last-writer-wins, so the final file must equal
+one complete submitted document and contain no `.compose-*.tmp` files. Finally
+run Down and remove only that disposable root.
+
 For Containers QA, create only an explicitly named and labeled disposable
 container. In the Containers tab verify local filtering/sorting, ID-based
 selection, details, stopped/running processes, logs, stats, action confirmations

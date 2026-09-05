@@ -888,7 +888,7 @@ which backend mechanism handles each one.
 | --- | --- | --- | --- | --- | --- | --- |
 | Dashboard | Base summary refresh only | None | None | None | `Dashboard.RefreshHandler.ReadRefresh` | Implemented, read-only |
 | Containers | Base list; `RequestDetails`; `RequestProcesses` | `Start`, `Stop`, `Restart`, `Pause`, `Unpause`, `Kill`, `Rename`, `Remove` | None | `Logs`, `Stats` | `Containers.API.ReadRefresh` | Implemented |
-| Compose | Base project list; `RequestDetails` | `Start`, `Stop`, `Restart`, `Pause`, `Unpause`, `Scale` | `Up`, `Down`, `Pull`, `Build` | `Logs` | `Compose.API.ReadRefresh` | Implemented; interactive exec deferred |
+| Compose | Base project list; `RequestDetails`; managed `ConfigPath`/`ReadConfig` | `Start`, `Stop`, `Restart`, `Pause`, `Unpause`, `Scale`, `SaveConfig` | `Up`, `Down`, `Pull`, `Build` | `Logs` | `Compose.API.ReadRefresh` | Implemented; interactive exec deferred |
 | Images | Base list; `RequestDetails`; `RequestHistory` | `Tag`, `Remove`, guarded filtered `Prune` | `Pull` | None | `Images.API.ReadRefresh` | Implemented |
 | Volumes | Base list; `RequestDetails`; `RequestAttachments` | `Create`, `Remove`, guarded label-filtered `Prune` | None | None | `Volumes.API.ReadRefresh` | Implemented |
 | Networks | Base list; `RequestDetails`; `RequestConnections` | `Create`, `Remove`, guarded filtered `Prune`, `Connect`, `Disconnect` | None | None | `Networks.API.ReadRefresh` | Implemented |
@@ -937,20 +937,27 @@ session disconnects, although the backend-owned job itself continues.
 
 #### Compose Slice 3.5: configuration editor and creator
 
-Immediately after the initial Compose page is implemented, a separate Slice
-3.5 will add configuration authoring. It is intentionally not part of Slice 3:
-it changes the backend as well as the TUI. The TUI will use Bubble Tea's
-text-area component to edit YAML starting from a preconfigured Compose
-template. The first iteration does not ask the user for a filesystem path: it
-derives `<ComposeRoot>/<project>/compose.yaml` beneath the configured root.
-Before sending anything to the backend, the TUI will perform a YAML syntax
-check and keep invalid content in the editor with a clear validation error.
-The backend will validate that derived path/write boundary beneath
-`ComposeRoots`, create or replace the file atomically where possible, and only
-the saved valid configuration will be converted into the existing
-`ProjectSpec`/`Up` job pipeline. Creation/editing, save failures, path
-traversal, concurrent edits, and running a newly created project require their
-own tests and disposable allowed-root manual verification.
+The Compose page provides `n` to create and `E` to edit a managed configuration
+with Bubble Tea's text-area component. The editor starts new files from a valid
+template. It validates YAML syntax and the Compose schema before calling the
+backend, preserves invalid content for correction, and never presents an
+arbitrary filesystem path input.
+
+The backend derives `<first ComposeRoot>/<project>/compose.yaml` from a strict
+Compose project name. `ConfigPath` derives that location, `ReadConfig` returns
+only the managed file as a plain-text DTO, and `SaveConfig` is a normal short
+command handled by `CommandExecutor`. The save worker repeats validation,
+opens the configured directory through Go's root-scoped filesystem API,
+rejects symlink/non-regular targets, writes a restrictive temporary file, syncs
+it, and atomically renames it over `compose.yaml`. Saving never starts Docker;
+on success the TUI opens a prefilled `Up` form and the user explicitly decides
+whether to start the existing job pipeline.
+
+There is no second file registry, editor cache, save queue, or same-project
+lock. Concurrent saves use the existing command workers: each rename is atomic
+and the last complete save wins. Active project discovery remains based on
+Docker Compose labels, so a newly saved project appears in the shared project
+list only after its separate `Up` operation creates Docker resources.
 
 **Images.** `Backend.RequestRefresh(PageImages)` publishes the complete local
 image list. `RequestDetails` and `RequestHistory` submit targeted refresh keys.
@@ -1014,6 +1021,7 @@ internal/backend/containers/
 internal/backend/compose/
 ├── api.go
 ├── commands.go
+├── config.go
 ├── docker.go
 ├── errors.go
 ├── jobs.go

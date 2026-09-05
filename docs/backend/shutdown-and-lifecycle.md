@@ -2,6 +2,11 @@
 
 Ownership determines cancellation. A TUI context is never used as the execution context of an accepted refresh, command, or job; it does own subscriptions and streams.
 
+Compose configuration reads are direct, session-owned one-shot reads. Configuration
+saves are short mutations submitted to the Command Executor: once accepted, the
+backend worker owns the atomic file write and the caller context controls only
+submission and waiting for its result.
+
 ## Application shutdown
 
 `Backend.Close(ctx)` starts shutdown once. Multiple callers may wait with independent contexts; cancellation of one wait does not interrupt the shared shutdown.

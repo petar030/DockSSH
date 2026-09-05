@@ -9,15 +9,14 @@ import (
 )
 
 func (m Model) View() string {
+	var content string
 	if !m.hasData {
 		message := "Loading Compose projects…"
 		if m.err != nil {
 			message = "Compose unavailable\n\n" + ui.ErrorNotice(m.err.Error(), max(m.width-6, 1)) + "\n\nPress r to retry."
 		}
-		return fit(lipgloss.NewStyle().Padding(2, 3).Render(message), m.width, m.height)
-	}
-	var content string
-	if m.width >= 110 {
+		content = lipgloss.NewStyle().Padding(2, 3).Render(message)
+	} else if m.width >= 110 {
 		left := m.listView(max(m.width*2/5, 52), m.height)
 		right := m.detailView(max(m.width-lipgloss.Width(left)-1, 54), m.height)
 		content = lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
@@ -121,22 +120,40 @@ func (m Model) overlayView() string {
 	switch m.overlay {
 	case filterOverlay:
 		return panel("FILTER COMPOSE PROJECTS", "> "+safe(m.filterEdit)+"_\n\nenter apply   esc cancel", width)
+	case newConfigOverlay:
+		return panel("NEW COMPOSE CONFIGURATION", "Project names use lowercase letters, digits, - or _.\n\n> Project name: "+safe(m.fields[0])+"_\n\nenter continue   esc cancel\n"+notice(m.notice, width), width)
+	case configEditorOverlay:
+		return m.configEditorView()
 	case stopOverlay:
 		return panel("STOP COMPOSE PROJECT", form([]string{"Services (comma, optional)", "Timeout (example: 10s)"}, m.fields[:2], m.field)+"\n\nenter stop   esc cancel\n"+notice(m.notice, width), width)
 	case restartOverlay:
 		return panel("RESTART COMPOSE PROJECT", form([]string{"Services (comma, optional)", "Timeout (example: 10s)"}, m.fields[:2], m.field)+fmt.Sprintf("\n[n] no dependencies: %t", m.optionB)+"\n\nenter restart   esc cancel\n"+notice(m.notice, width), width)
 	case scaleOverlay:
-		return panel("SCALE COMPOSE SERVICE", form([]string{"Compose files (comma)", "Service", "Replicas"}, m.fields[:3], m.field)+"\n\nenter scale   esc cancel\n"+notice(m.notice, width), width)
+		return panel("SCALE COMPOSE SERVICE", "Project: "+safe(m.formProject)+"\n\n"+form([]string{"Compose files (comma)", "Service", "Replicas"}, m.fields[:3], m.field)+"\n\nenter scale   esc cancel\n"+notice(m.notice, width), width)
 	case upOverlay:
-		return panel("COMPOSE UP", form([]string{"Compose files (comma)", "Services (comma, optional)", "Profiles (comma, optional)"}, m.fields[:3], m.field)+fmt.Sprintf("\n[a] remove orphans: %t", m.optionA)+"\n\nenter start   esc cancel\n"+notice(m.notice, width), width)
+		return panel("COMPOSE UP", "Project: "+safe(m.formProject)+"\n\n"+form([]string{"Compose files (comma)", "Services (comma, optional)", "Profiles (comma, optional)"}, m.fields[:3], m.field)+fmt.Sprintf("\n[a] remove orphans: %t", m.optionA)+"\n\nenter start   esc cancel\n"+notice(m.notice, width), width)
 	case downOverlay:
 		return panel("CONFIRM COMPOSE DOWN", "This removes project containers and networks.\n\n"+form([]string{"Services (comma, optional)", "Timeout (example: 10s)"}, m.fields[:2], m.field)+fmt.Sprintf("\n[a] remove orphans: %t\n[v] remove volumes: %t", m.optionA, m.optionB)+"\n\nenter confirm down   esc cancel\n"+notice(m.notice, width), width)
 	case pullOverlay:
-		return panel("COMPOSE PULL", form([]string{"Compose files (comma)", "Services (comma, optional)", "Profiles (comma, optional)"}, m.fields[:3], m.field)+fmt.Sprintf("\n[a] ignore failures: %t", m.optionA)+"\n\nenter start   esc cancel\n"+notice(m.notice, width), width)
+		return panel("COMPOSE PULL", "Project: "+safe(m.formProject)+"\n\n"+form([]string{"Compose files (comma)", "Services (comma, optional)", "Profiles (comma, optional)"}, m.fields[:3], m.field)+fmt.Sprintf("\n[a] ignore failures: %t", m.optionA)+"\n\nenter start   esc cancel\n"+notice(m.notice, width), width)
 	case buildOverlay:
-		return panel("COMPOSE BUILD", form([]string{"Compose files (comma)", "Services (comma, optional)", "Profiles (comma, optional)"}, m.fields[:3], m.field)+fmt.Sprintf("\n[a] pull: %t\n[c] no cache: %t", m.optionA, m.optionB)+"\n\nenter start   esc cancel\n"+notice(m.notice, width), width)
+		return panel("COMPOSE BUILD", "Project: "+safe(m.formProject)+"\n\n"+form([]string{"Compose files (comma)", "Services (comma, optional)", "Profiles (comma, optional)"}, m.fields[:3], m.field)+fmt.Sprintf("\n[a] pull: %t\n[c] no cache: %t", m.optionA, m.optionB)+"\n\nenter start   esc cancel\n"+notice(m.notice, width), width)
 	}
 	return ""
+}
+
+func (m Model) configEditorView() string {
+	width := max(min(m.width-10, 120), 54)
+	content := strings.Join([]string{
+		"Project: " + safe(m.editorProject),
+		"Managed file: " + safe(m.editorPath),
+		"",
+		m.editor.View(),
+		"",
+		notice(m.notice, width),
+		"ctrl+s validate and save   esc cancel",
+	}, "\n")
+	return panel("COMPOSE CONFIGURATION", content, width)
 }
 
 func (m Model) logsView() string {

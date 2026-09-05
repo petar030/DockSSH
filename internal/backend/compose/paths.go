@@ -1,11 +1,16 @@
 package compose
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
 )
+
+var managedProjectName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
 func normalizeAllowedRoots(values []string) ([]string, error) {
 	roots := make([]string, 0, len(values))
@@ -61,4 +66,39 @@ func withinAnyRoot(path string, roots []string) bool {
 		}
 	}
 	return false
+}
+
+func (api *API) managedConfigPath(projectName string) (string, string, error) {
+	projectName = strings.TrimSpace(projectName)
+	if !managedProjectName.MatchString(projectName) {
+		return "", "", &backend.AppError{
+			Code: backend.ErrorInvalidInput, Operation: "select managed Compose configuration",
+			Resource: "compose project", ID: projectName,
+			Err: fmt.Errorf("use lowercase letters, digits, hyphens or underscores, beginning with a letter or digit"),
+		}
+	}
+	if len(api.roots) == 0 {
+		return "", "", &backend.AppError{
+			Code: backend.ErrorPermissionDenied, Operation: "select managed Compose configuration",
+			Resource: "configured Compose root", ID: projectName,
+		}
+	}
+	root := api.roots[0]
+	path := filepath.Join(root, projectName, "compose.yaml")
+	if !withinAnyRoot(path, []string{root}) {
+		return "", "", &backend.AppError{
+			Code: backend.ErrorPermissionDenied, Operation: "select managed Compose configuration", ID: projectName,
+		}
+	}
+	return projectName, path, nil
+}
+
+func openManagedRoot(root string) (*os.Root, error) {
+	value, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, &backend.AppError{
+			Code: backend.ErrorPermissionDenied, Operation: "open configured Compose root", ID: root, Err: err,
+		}
+	}
+	return value, nil
 }

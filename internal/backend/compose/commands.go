@@ -81,6 +81,28 @@ func (api *API) scaleRequest(spec ProjectSpec, options ScaleOptions) (backend.Co
 	})
 }
 
+func (api *API) saveConfigRequest(options SaveConfigOptions) (backend.CommandRequest, error) {
+	projectName, _, err := api.managedConfigPath(options.ProjectName)
+	if err != nil {
+		return backend.CommandRequest{}, err
+	}
+	if err := validateConfigContent(options.Content); err != nil {
+		return backend.CommandRequest{}, err
+	}
+	return backend.CommandRequest{
+		OperationID: "compose.config.save",
+		Operation:   "save Compose configuration",
+		Affected:    []backend.AffectedResource{{Kind: "compose_project", ID: projectName}},
+		// Saving a file changes no Docker state. Refreshing the active-project
+		// list is harmless and lets an already-active project reconcile; a new
+		// project becomes discoverable only after the separate Up job.
+		RefreshKeys: []backend.RefreshKey{{Kind: RefreshKindList}},
+		Run: func(context.Context) error {
+			return api.writeConfig(projectName, options.Content)
+		},
+	}, nil
+}
+
 func (api *API) commandRequest(
 	projectName, operation, operationID string,
 	run func(context.Context, string) error,
