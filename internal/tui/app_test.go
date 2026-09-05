@@ -11,6 +11,7 @@ import (
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
 	backendcontainers "github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 	backendimages "github.com/petar030/ssh-native-docker-tui/internal/backend/images"
+	backendnetworks "github.com/petar030/ssh-native-docker-tui/internal/backend/networks"
 	backendvolumes "github.com/petar030/ssh-native-docker-tui/internal/backend/volumes"
 )
 
@@ -23,6 +24,7 @@ func (fake *appBackend) RequestRefresh(backend.Page) error  { return nil }
 func (fake *appBackend) Containers() *backendcontainers.API { return nil }
 func (fake *appBackend) Images() *backendimages.API         { return nil }
 func (fake *appBackend) Volumes() *backendvolumes.API       { return nil }
+func (fake *appBackend) Networks() *backendnetworks.API     { return nil }
 
 func (fake *appBackend) Subscribe(context.Context, backend.Page, backend.EventFilter) (backend.Subscription, error) {
 	fake.mu.Lock()

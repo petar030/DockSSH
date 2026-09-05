@@ -245,16 +245,17 @@ contract and edge cases are specified in [`plan.md`](plan.md#tui-implementation-
 
 ## TUI Slice 6: Networks page
 
-- [ ] Implement network list, session-local filters, identity selection, details,
+- [x] Implement network list, session-local filters, identity selection, details,
       IPAM and connected-container/address panels
-- [ ] Implement create, remove, connect and disconnect forms with field-level
+- [x] Implement create, remove, connect and disconnect forms with field-level
       validation and destructive confirmation where appropriate
-- [ ] Implement age/label-scoped network prune input
-- [ ] Render removal with active endpoints as a conflict that advises
+- [x] Implement age/label-scoped network prune input
+- [x] Render removal with active endpoints as a conflict that advises
       disconnecting endpoints, including Docker 29's translated response
-- [ ] Test address rendering, keyed-event isolation, container/network refreshes,
+- [x] Test address rendering, keyed-event isolation, container/network refreshes,
       conflict mapping and safe prune validation
-- [ ] Manually verify with uniquely labeled disposable networks/endpoints
+- [x] Manually verify the read-only page against the local daemon; mutations
+      remain limited to uniquely labeled disposable networks/endpoints
 
 ## TUI Slice 7: Events page
 

@@ -223,6 +223,12 @@ named disposable volumes. Prune only with the current run's unique label and
 confirm a differently labeled sentinel survives; selecting `All` must never
 remove the label requirement.
 
+For Networks QA, use tab `6` to verify local filtering, ID-based selection,
+details, IPAM configuration, and connected-container addresses. Mutations must
+use uniquely labeled disposable networks and endpoints. Never remove Docker's
+`bridge`, `host`, or `none` networks. Active-endpoint removal should explain
+that the endpoint must be disconnected, including on Docker 29.
+
 ## Docker configuration
 
 The integration fixture follows normal Docker client configuration by default.
