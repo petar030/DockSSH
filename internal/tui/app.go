@@ -398,7 +398,7 @@ func (app *App) render() string {
 	} else if app.activeTab == 7 {
 		pageHelp = app.system.Help()
 	}
-	globalHelp := "[ / ] switch tab   1-8 open page   r refresh   ? help   q quit"
+	globalHelp := "[ / ] switch tab │ 1-8 open page │ r refresh │ ? help │ q quit"
 	if app.showHelp {
 		body = app.helpView()
 	}
@@ -535,9 +535,9 @@ func (app *App) deactivateAll() {
 
 func (app *App) jobHelp(global string) string {
 	if summary := app.jobs.Summary(); summary != "" {
-		return summary + "   " + global
+		return summary + " │ " + global
 	}
-	return "J jobs   " + global
+	return "J jobs │ " + global
 }
 
 var _ tea.Model = (*App)(nil)

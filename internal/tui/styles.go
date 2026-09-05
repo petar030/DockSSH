@@ -54,18 +54,16 @@ func renderTabs(width, active int) string {
 }
 
 func renderFooter(width int, status, pageHelp, globalHelp string) string {
-	inner := max(width-4, 1)
-	pageLines := strings.Split(pageHelp, "\n")
-	for index := range pageLines {
-		pageLines[index] = ui.Truncate(pageLines[index], inner)
-	}
-	pageHelp = strings.Join(pageLines, "\n")
+	// Leave a small safety margin for the border and horizontal padding. This
+	// keeps a truncated styled shortcut from wrapping its final separator.
+	inner := max(width-6, 1)
 	if pageHelp == "" {
 		pageHelp = ui.Truncate(ui.SanitizeLine(status), inner)
+	} else {
+		pageHelp = ui.CommandBar(pageHelp, inner)
 	}
-	globalHelp = ui.Truncate(globalHelp, inner)
-	body := lipgloss.NewStyle().Foreground(ui.Primary).Render(pageHelp) + "\n" +
-		lipgloss.NewStyle().Foreground(ui.Muted).Render(globalHelp)
+	globalHelp = ui.CommandBar(globalHelp, inner)
+	body := pageHelp + "\n" + globalHelp
 	return lipgloss.NewStyle().Width(max(width-2, 1)).Padding(0, 1).
 		Border(lipgloss.RoundedBorder()).BorderForeground(ui.Border).Render(body)
 }

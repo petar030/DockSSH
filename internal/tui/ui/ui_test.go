@@ -28,6 +28,18 @@ func TestTruncatePreservesANSIBoundariesAndWidth(t *testing.T) {
 	}
 }
 
+func TestCommandBarHighlightsKeysAndFits(t *testing.T) {
+	value := CommandBar("↑/↓ Scroll │ pgup/pgdown Page │ ctrl+end Bottom", 80)
+	if width := lipgloss.Width(value); width > 80 {
+		t.Fatalf("command bar width = %d, want <= 80", width)
+	}
+	for _, text := range []string{"↑/↓", "Scroll", "pgup/pgdown", "Page", "ctrl+end", "Bottom", "·"} {
+		if !strings.Contains(value, text) {
+			t.Fatalf("command bar missing %q: %q", text, value)
+		}
+	}
+}
+
 func TestStandardNoticesAreSafeAndWidthBounded(t *testing.T) {
 	for _, notice := range []string{
 		ErrorNotice("daemon failed\x1b[2J with a long explanation", 18),

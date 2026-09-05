@@ -56,6 +56,44 @@ func Truncate(value string, width int) string {
 	return ansi.Truncate(value, width, "…")
 }
 
+// CommandBar renders a compact keyboard-help row. Each item uses the first
+// token as its key and the remaining text as its description, with a muted dot
+// between items. Page models supply plain text separated by │ so the same
+// presentation is used throughout the application frame.
+func CommandBar(value string, width int) string {
+	lines := strings.Split(value, "\n")
+	for index, line := range lines {
+		items := strings.Split(line, "│")
+		rendered := make([]string, 0, len(items))
+		for _, item := range items {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				continue
+			}
+			rendered = append(rendered, commandItem(item))
+		}
+		lines[index] = Truncate(strings.Join(rendered, lipgloss.NewStyle().Foreground(Muted).Render(" · ")), width)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func commandItem(item string) string {
+	fields := strings.Fields(item)
+	if len(fields) == 0 {
+		return ""
+	}
+	key, description := fields[0], strings.Join(fields[1:], " ")
+	if strings.HasPrefix(item, "[ / ] ") {
+		key = "[ / ]"
+		description = strings.TrimSpace(strings.TrimPrefix(item, "[ / ]"))
+	}
+	renderedKey := lipgloss.NewStyle().Bold(true).Foreground(Primary).Render(key)
+	if description == "" {
+		return renderedKey
+	}
+	return renderedKey + " " + lipgloss.NewStyle().Foreground(Muted).Render(description)
+}
+
 // ErrorNotice is the standard presentation for recoverable page, command and
 // stream errors. It sanitizes backend-controlled text and always fits one row.
 func ErrorNotice(value string, width int) string {

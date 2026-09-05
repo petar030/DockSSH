@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
 	backendcompose "github.com/petar030/ssh-native-docker-tui/internal/backend/compose"
 	backendcontainers "github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
@@ -73,7 +74,7 @@ func TestRootRendersPersistentFrameAndContainersPage(t *testing.T) {
 	if app.activeTab != 1 || app.dashboard.Active() {
 		t.Fatalf("tab switch did not deactivate Dashboard: tab=%d active=%v", app.activeTab, app.dashboard.Active())
 	}
-	containerView := app.View().Content
+	containerView := ansi.Strip(app.View().Content)
 	if !strings.Contains(containerView, "Loading containers") ||
 		!strings.Contains(containerView, "DOCKER TUI") ||
 		!strings.Contains(containerView, "1-8 open page") {
@@ -85,7 +86,7 @@ func TestRootHeaderShowsSSHEndpoint(t *testing.T) {
 	app := NewWithSSHAddress(context.Background(), &appBackend{}, "127.0.0.1:23234")
 	_ = app.Init()
 	_, _ = app.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	view := app.View().Content
+	view := ansi.Strip(app.View().Content)
 	for _, value := range []string{"🐳", "SSH: 127.0.0.1:23234"} {
 		if !strings.Contains(view, value) {
 			t.Fatalf("header missing %q:\n%s", value, view)
@@ -99,7 +100,7 @@ func TestRootKeepsExpandedComposeFooterAtTerminalBottom(t *testing.T) {
 	_, _ = app.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	_, _ = app.Update(key("3"))
 
-	view := app.View().Content
+	view := ansi.Strip(app.View().Content)
 	if height := lipgloss.Height(view); height != 30 {
 		t.Fatalf("Compose frame height = %d, want 30:\n%s", height, view)
 	}
