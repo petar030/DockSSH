@@ -11,6 +11,12 @@ import (
 	"strings"
 )
 
+// Default SSH values used when the corresponding saved setting is empty.
+const (
+	DefaultListenAddress = "127.0.0.1:23234"
+	DefaultHostKeyPath   = ".ssh-docker-tui/host_ed25519"
+)
+
 // schemaVersion is the persisted JSON schema version.
 const schemaVersion = 1
 
@@ -18,11 +24,11 @@ const schemaVersion = 1
 // All fields have safe zero values; a zero Config represents an
 // unconfigured first-run state.
 type Config struct {
-	Version int            `json:"version"`
-	Server  ServerConfig   `json:"server"`
-	Docker  DockerConfig   `json:"docker"`
-	Compose ComposeConfig  `json:"compose"`
-	Auth    AuthConfig     `json:"authentication"`
+	Version int           `json:"version"`
+	Server  ServerConfig  `json:"server"`
+	Docker  DockerConfig  `json:"docker"`
+	Compose ComposeConfig `json:"compose"`
+	Auth    AuthConfig    `json:"authentication"`
 }
 
 // ServerConfig contains SSH server network and key settings.

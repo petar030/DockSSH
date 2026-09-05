@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	DefaultAddress     = "127.0.0.1:23234"
-	DefaultHostKeyPath = ".ssh-docker-tui/host_ed25519"
+	DefaultAddress     = serverconfig.DefaultListenAddress
+	DefaultHostKeyPath = serverconfig.DefaultHostKeyPath
 )
 
 // Config holds the SSH server configuration.

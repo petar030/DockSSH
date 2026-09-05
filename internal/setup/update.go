@@ -24,11 +24,11 @@ func New(configPath string, cfg serverconfig.Config, store Store) Model {
 
 	// Populate server fields from config.
 	m.serverFields[fieldAddress] = fieldModel{
-		label: "Listen address (host:port)",
+		label: "Listen address (host:port) [default: " + serverconfig.DefaultListenAddress + "]",
 		value: cfg.Server.Address,
 	}
 	m.serverFields[fieldHostKey] = fieldModel{
-		label: "Host-key path",
+		label: "Host-key path [default: " + serverconfig.DefaultHostKeyPath + "]",
 		value: cfg.Server.HostKeyPath,
 	}
 
