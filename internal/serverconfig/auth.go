@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/crypto/ssh"
@@ -13,6 +14,77 @@ import (
 // bcryptCost is the work factor used when hashing a new password.
 // Cost 12 is a current reasonable value balancing security and latency.
 const bcryptCost = 12
+
+const (
+	minPasswordLength = 14
+	maxPasswordLength = 128
+)
+
+var commonPasswords = map[string]struct{}{
+	"12345678901234": {}, "password123456": {}, "password123": {},
+	"docker12345678": {}, "administrator": {}, "letmein123456": {},
+}
+
+// ValidatePassword applies the policy used when setting a new password in
+// the setup UI. HashPassword remains permissive for migration compatibility.
+func ValidatePassword(password string) error {
+	runes := []rune(password)
+	if len(runes) < minPasswordLength {
+		return fmt.Errorf("password must be at least %d characters", minPasswordLength)
+	}
+	if len(runes) > maxPasswordLength {
+		return fmt.Errorf("password must not exceed %d characters", maxPasswordLength)
+	}
+	if strings.TrimSpace(password) != password || strings.TrimSpace(password) == "" {
+		return fmt.Errorf("password must not start or end with whitespace")
+	}
+	for _, r := range runes {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("password must not contain control characters")
+		}
+	}
+	lower := strings.ToLower(password)
+	if _, found := commonPasswords[lower]; found {
+		return fmt.Errorf("password is too common")
+	}
+	if strings.Contains(lower, "password") || strings.Contains(lower, "docker") || strings.Contains(lower, "ssh-docker-tui") {
+		return fmt.Errorf("password must not contain application-related words")
+	}
+	if allSame(runes) || sequential(runes) {
+		return fmt.Errorf("password must not be a repeated or sequential pattern")
+	}
+	return nil
+}
+
+func allSame(value []rune) bool {
+	if len(value) == 0 {
+		return false
+	}
+	for _, r := range value[1:] {
+		if r != value[0] {
+			return false
+		}
+	}
+	return true
+}
+
+func sequential(value []rune) bool {
+	if len(value) < 3 {
+		return false
+	}
+	ascending, descending := true, true
+	for index := 1; index < len(value); index++ {
+		delta := value[index] - value[index-1]
+		ascending = ascending && delta == 1
+		descending = descending && delta == -1
+	}
+	return ascending || descending
+}
+
+// PasswordPolicyDescription is suitable for display in the setup UI.
+func PasswordPolicyDescription() string {
+	return fmt.Sprintf("at least %d characters; avoid common, repeated, sequential, or application-related passwords", minPasswordLength)
+}
 
 // HashPassword hashes password with bcrypt at bcryptCost and returns the
 // encoded hash string.  The plaintext password is not stored or logged.

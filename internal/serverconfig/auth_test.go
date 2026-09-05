@@ -15,6 +15,26 @@ func TestHashPasswordRejectsEmpty(t *testing.T) {
 	}
 }
 
+func TestValidatePasswordPolicy(t *testing.T) {
+	valid := "correct horse battery staple 9"
+	if err := ValidatePassword(valid); err != nil {
+		t.Fatalf("valid password rejected: %v", err)
+	}
+	for _, password := range []string{
+		"short",
+		"12345678901234",
+		"aaaaaaaaaaaaaa",
+		"abcdefghijklmn",
+		"password123456",
+		"docker-secure-value",
+		" leading-and-long-enough",
+	} {
+		if err := ValidatePassword(password); err == nil {
+			t.Fatalf("weak password %q was accepted", password)
+		}
+	}
+}
+
 func TestHashPasswordProducesVerifiableHash(t *testing.T) {
 	hash, err := HashPassword("correct-horse-battery-staple")
 	if err != nil {

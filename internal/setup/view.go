@@ -118,6 +118,7 @@ func (m Model) viewAuth() string {
 	switch m.authAction {
 	case authActionSetPassword:
 		b.WriteString(stylePrimary.Render("Set password") + "\n")
+		b.WriteString(styleMuted.Render(serverconfig.PasswordPolicyDescription()) + "\n")
 		b.WriteString(renderPasswordField("Password:        ", strings.Repeat("•", len(m.passwordInput)), !m.passwordCursor) + "\n")
 		b.WriteString(renderPasswordField("Confirm password:", strings.Repeat("•", len(m.passwordConfirm)), m.passwordCursor) + "\n")
 		b.WriteString(styleMuted.Render("Tab — switch field   Enter — confirm   Esc — cancel") + "\n")
@@ -266,7 +267,7 @@ func renderField(f fieldModel, active bool) string {
 		labelStyle = stylePrimary
 	}
 
-	label := labelStyle.Render(f.label+":")
+	label := labelStyle.Render(f.label + ":")
 	runes := []rune(f.value)
 	cursor := f.cursor
 	if cursor > len(runes) {

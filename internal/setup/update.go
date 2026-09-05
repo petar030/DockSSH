@@ -227,6 +227,13 @@ func (m Model) updateAuthSetPassword(key string) (Model, tea.Cmd) {
 			m.passwordCursor = false
 			return m, nil
 		}
+		if err := serverconfig.ValidatePassword(m.passwordInput); err != nil {
+			m.authError = err.Error()
+			m.passwordInput = ""
+			m.passwordConfirm = ""
+			m.passwordCursor = false
+			return m, nil
+		}
 		hash, err := serverconfig.HashPassword(m.passwordInput)
 		if err != nil {
 			m.authError = "could not hash password: " + err.Error()
