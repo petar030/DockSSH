@@ -124,3 +124,25 @@ func FormatBytes(value int64) string {
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(value)/float64(divisor), "KMGTPE"[exponent])
 }
+
+// UsageBar draws a compact primary-colour proportion bar. The caller supplies
+// the total represented by the bar; it may be total Docker-managed disk space
+// rather than host filesystem capacity.
+func UsageBar(used, total int64, width int) string {
+	width = max(width, 4)
+	if total <= 0 || used <= 0 {
+		return lipgloss.NewStyle().Foreground(Muted).Render(strings.Repeat("░", width))
+	}
+	filled := int((used*int64(width) + total - 1) / total)
+	filled = min(max(filled, 1), width)
+	return lipgloss.NewStyle().Foreground(Primary).Render(strings.Repeat("█", filled)) +
+		lipgloss.NewStyle().Foreground(Muted).Render(strings.Repeat("░", width-filled))
+}
+
+// Percent returns a clamped whole-number proportion suitable for a compact UI.
+func Percent(used, total int64) int {
+	if total <= 0 || used <= 0 {
+		return 0
+	}
+	return min(int(used*100/total), 100)
+}

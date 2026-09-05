@@ -18,15 +18,19 @@ func (m Model) View() string {
 	}
 	var out string
 	if m.width >= 110 {
-		left := m.infoView(max(m.width/2, 55))
-		right := m.diskView(max(m.width-lipgloss.Width(left)-1, 54))
+		leftWidth := max(m.width*2/5, 45)
+		rightWidth := max(m.width-leftWidth-1, 54)
+		left := lipgloss.JoinVertical(lipgloss.Left,
+			m.versionView(leftWidth),
+			m.hostView(leftWidth),
+		)
+		right := lipgloss.JoinVertical(lipgloss.Left,
+			m.driversView(rightWidth),
+			m.diskView(rightWidth),
+		)
 		out = lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 	} else {
-		topHeight := min(6, max(m.height/2, 1))
-		out = lipgloss.JoinVertical(lipgloss.Left,
-			fit(m.compactInfoView(m.width), m.width, topHeight),
-			fit(m.diskView(m.width), m.width, max(m.height-topHeight, 1)),
-		)
+		out = lipgloss.JoinVertical(lipgloss.Left, m.diskView(m.width), m.versionView(m.width), m.hostView(m.width), m.driversView(m.width))
 	}
 	if m.reportVisible {
 		out = ui.OverlayCentered(fit(out, m.width, m.height), m.reportView(), m.width, m.height)
@@ -35,6 +39,50 @@ func (m Model) View() string {
 		out = ui.OverlayCentered(fit(out, m.width, m.height), m.overlayView(), m.width, m.height)
 	}
 	return fit(out, m.width, m.height)
+}
+
+func (m Model) versionView(w int) string {
+	if !m.hasInfo {
+		return panel("DOCKER VERSION", "Information is loading…", w)
+	}
+	e := m.info.Engine
+	return panel("DOCKER VERSION", strings.Join([]string{
+		"Docker:       " + safe(e.Version),
+		"API:          " + safe(e.APIVersion) + " (min " + safe(e.MinAPIVersion) + ")",
+		"Platform:     " + safe(e.OS) + "/" + safe(e.Architecture),
+		"Experimental: " + fmt.Sprint(e.Experimental),
+	}, "\n"), w)
+}
+
+func (m Model) hostView(w int) string {
+	if !m.hasInfo {
+		return panel("HOST INFO", "Information is loading…", w)
+	}
+	h := m.info.Host
+	return panel("HOST INFO", strings.Join([]string{
+		"Name:       " + safe(h.Name),
+		"OS:         " + safe(h.OperatingSystem) + " " + safe(h.OSVersion),
+		"Kernel:     " + safe(h.KernelVersion),
+		"Resources:  " + fmt.Sprintf("%d CPUs, %s memory", h.CPUs, ui.FormatBytes(h.MemoryBytes)),
+		"Containers: " + fmt.Sprintf("%d (%d running, %d paused, %d stopped)", h.Containers, h.ContainersRunning, h.ContainersPaused, h.ContainersStopped),
+		"Images:     " + fmt.Sprint(h.Images),
+	}, "\n"), w)
+}
+
+func (m Model) driversView(w int) string {
+	if !m.hasInfo {
+		return panel("DRIVERS", "Information is loading…", w)
+	}
+	h := m.info.Host
+	lines := []string{
+		"Storage: " + unknown(h.StorageDriver) + "   Logging: " + unknown(h.LoggingDriver),
+		"Cgroup:  " + unknown(h.CgroupDriver) + " " + unknown(h.CgroupVersion),
+		"Runtime: " + unknown(h.DefaultRuntime),
+	}
+	for _, value := range h.DriverStatus {
+		lines = append(lines, safe(value.Name)+": "+safe(value.Value))
+	}
+	return panel("DRIVERS", strings.Join(lines, "\n"), w)
 }
 
 func (m Model) compactInfoView(w int) string {
@@ -64,7 +112,17 @@ func (m Model) diskView(w int) string {
 		return panel("DISK USAGE", "Detailed disk usage is loading…", w)
 	}
 	if m.diskMode == 0 {
-		lines := []string{"RESOURCE      COUNT  ACTIVE  TOTAL        RECLAIMABLE", usage("Containers", m.disk.Containers), usage("Images", m.disk.Images), usage("Volumes", m.disk.Volumes), usage("Build cache", m.disk.BuildCache), "Press i to cycle item details."}
+		total := m.disk.Containers.TotalBytes + m.disk.Images.TotalBytes + m.disk.Volumes.TotalBytes + m.disk.BuildCache.TotalBytes
+		lines := []string{
+			"Relative Docker disk usage",
+			systemDiskLine("Images", m.disk.Images.TotalBytes, total, w),
+			systemDiskLine("Containers", m.disk.Containers.TotalBytes, total, w),
+			systemDiskLine("Volumes", m.disk.Volumes.TotalBytes, total, w),
+			systemDiskLine("Build cache", m.disk.BuildCache.TotalBytes, total, w),
+			"",
+			systemDiskLine("Total", total, total, w),
+			"Press i to cycle item details.",
+		}
 		return panel("▤  DISK USAGE", strings.Join(lines, "\n"), w)
 	}
 	names := []string{"", "CONTAINERS", "IMAGES", "VOLUMES", "BUILD CACHE"}
@@ -97,8 +155,9 @@ func (m Model) diskView(w int) string {
 	start := min(m.scroll, max(len(rows)-1, 0))
 	return panel("▤  "+names[m.diskMode], strings.Join(rows[start:], "\n"), w)
 }
-func usage(name string, v backendsystem.ResourceDiskUsage) string {
-	return fmt.Sprintf("%-13s %5d %7d %12s %12s", name, v.Count, v.Active, ui.FormatBytes(v.TotalBytes), ui.FormatBytes(v.ReclaimableBytes))
+func systemDiskLine(name string, used, total int64, width int) string {
+	barWidth := max(width-lipgloss.Width(name)-19, 6)
+	return fmt.Sprintf("%-11s %s %s %3d%%", name, ui.UsageBar(used, total, barWidth), ui.FormatBytes(used), ui.Percent(used, total))
 }
 func (m Model) overlayView() string {
 	w := max(min(m.width-12, 86), 52)

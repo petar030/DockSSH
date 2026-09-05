@@ -255,4 +255,7 @@ func TestDashboardFitsMinimumContentArea(t *testing.T) {
 	if height := lipgloss.Height(view); height > 20 {
 		t.Fatalf("minimum Dashboard height = %d, want <= 20\n%s", height, view)
 	}
+	if !strings.Contains(view, "█") {
+		t.Fatalf("Dashboard disk usage is missing its bar chart:\n%s", view)
+	}
 }

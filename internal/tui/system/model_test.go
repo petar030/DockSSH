@@ -103,6 +103,11 @@ func TestInfoDiskKeyOverflowPreservesAndSanitizes(t *testing.T) {
 	m, _ = m.Update(eventReceivedMsg{generation: m.generation, open: true, event: backend.EventEnvelope{Key: backend.RefreshKey{Kind: backendsystem.RefreshKindDiskUsage}, Payload: disk}})
 	m.diskMode = 3
 	view := m.SetSize(120, 25).View()
+	for _, label := range []string{"DOCKER VERSION", "HOST INFO", "DRIVERS", "VOLUMES"} {
+		if !strings.Contains(view, label) {
+			t.Fatalf("system view missing %q:\n%s", label, view)
+		}
+	}
 	if strings.Contains(view, "\x1b[31m") || strings.Contains(view, "host\nunsafe") || !strings.Contains(view, "unknown or 0 B") {
 		t.Fatalf("view=%s", view)
 	}

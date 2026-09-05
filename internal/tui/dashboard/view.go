@@ -69,12 +69,23 @@ func (model Model) resourcesPanel(width int) string {
 
 func (model Model) diskPanel(width int) string {
 	disk := model.summary.DiskUsage
+	total := disk.Containers.TotalBytes + disk.Images.TotalBytes + disk.Volumes.TotalBytes + disk.BuildCache.TotalBytes
+	if width < 68 {
+		body := strings.Join([]string{
+			diskLineCompact("Containers", disk.Containers.TotalBytes, total, width),
+			diskLineCompact("Images", disk.Images.TotalBytes, total, width),
+			diskLineCompact("Volumes", disk.Volumes.TotalBytes, total, width),
+			diskLineCompact("Build cache", disk.BuildCache.TotalBytes, total, width),
+		}, "\n")
+		return panel("DISK USAGE", body, width)
+	}
 	body := strings.Join([]string{
-		"              total / reclaimable",
-		diskLine("Containers", disk.Containers.TotalBytes, disk.Containers.ReclaimableBytes),
-		diskLine("Images", disk.Images.TotalBytes, disk.Images.ReclaimableBytes),
-		diskLine("Volumes", disk.Volumes.TotalBytes, disk.Volumes.ReclaimableBytes),
-		diskLine("Build cache", disk.BuildCache.TotalBytes, disk.BuildCache.ReclaimableBytes),
+		"Relative Docker disk usage",
+		diskLine("Containers", disk.Containers.TotalBytes, total, width),
+		diskLine("Images", disk.Images.TotalBytes, total, width),
+		diskLine("Volumes", disk.Volumes.TotalBytes, total, width),
+		diskLine("Build cache", disk.BuildCache.TotalBytes, total, width),
+		diskLine("Total", total, total, width),
 	}, "\n")
 	return panel("DISK USAGE", body, width)
 }
@@ -104,8 +115,14 @@ func panel(title, body string, width int) string {
 		Render(lipgloss.NewStyle().Bold(true).Foreground(ui.Primary).Render(title) + "\n" + body)
 }
 
-func diskLine(name string, total, reclaimable int64) string {
-	return fmt.Sprintf("%-11s %9s / %9s", name, ui.FormatBytes(total), ui.FormatBytes(reclaimable))
+func diskLine(name string, used, total int64, width int) string {
+	barWidth := max(width-lipgloss.Width(name)-19, 5)
+	return fmt.Sprintf("%-11s %s %s %3d%%", name, ui.UsageBar(used, total, barWidth), ui.FormatBytes(used), ui.Percent(used, total))
+}
+
+func diskLineCompact(name string, used, total int64, width int) string {
+	barWidth := max(width-lipgloss.Width(name)-10, 4)
+	return fmt.Sprintf("%s %s %3d%%", name, ui.UsageBar(used, total, barWidth), ui.Percent(used, total))
 }
 
 func safeDash(value string) string {
