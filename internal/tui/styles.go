@@ -47,7 +47,11 @@ func renderTabs(width, active int) string {
 
 func renderFooter(width int, status, pageHelp, globalHelp string) string {
 	inner := max(width-4, 1)
-	pageHelp = ui.Truncate(pageHelp, inner)
+	pageLines := strings.Split(pageHelp, "\n")
+	for index := range pageLines {
+		pageLines[index] = ui.Truncate(pageLines[index], inner)
+	}
+	pageHelp = strings.Join(pageLines, "\n")
 	if pageHelp == "" {
 		pageHelp = ui.Truncate(ui.SanitizeLine(status), inner)
 	}
