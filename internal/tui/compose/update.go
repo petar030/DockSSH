@@ -153,7 +153,7 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 		m.pending = false
 		if message.err != nil {
 			m.notice = errorText(message.err)
-			m.overlay = message.operation
+			m.failure, m.overlay = m.notice, failureOverlay
 		} else {
 			m.notice = ""
 			m.overlay = noOverlay
@@ -171,7 +171,7 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 		m.pending = false
 		if message.err != nil {
 			m.notice = errorText(message.err)
-			m.overlay = message.operation
+			m.failure, m.overlay = m.notice, failureOverlay
 			return m, nil
 		}
 		if message.job == nil {

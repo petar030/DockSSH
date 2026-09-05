@@ -131,6 +131,8 @@ func (m Model) overlayView() string {
 		return panel("NEW COMPOSE CONFIGURATION", "Project names use lowercase letters, digits, - or _.\n\n> Project name: "+safe(m.fields[0])+"_\n\nenter continue   esc cancel\n"+notice(m.notice, width), width)
 	case configEditorOverlay:
 		return m.configEditorView()
+	case failureOverlay:
+		return m.failureView()
 	case stopOverlay:
 		return panel("STOP COMPOSE PROJECT", form([]string{"Services (comma, optional)", "Timeout (example: 10s)"}, m.fields[:2], m.field)+"\n\nenter stop   esc cancel\n"+notice(m.notice, width), width)
 	case restartOverlay:
@@ -147,6 +149,34 @@ func (m Model) overlayView() string {
 		return panel("COMPOSE BUILD", "Project: "+safe(m.formProject)+"\n\n"+form([]string{"Compose files (comma)", "Services (comma, optional)", "Profiles (comma, optional)"}, m.fields[:3], m.field)+fmt.Sprintf("\n[a] pull: %t\n[c] no cache: %t", m.optionA, m.optionB)+"\n\nenter start   esc cancel\n"+notice(m.notice, width), width)
 	}
 	return ""
+}
+
+func (m Model) failureView() string {
+	width := max(min(m.width-12, 92), 52)
+	lines := append([]string{"The Compose operation did not complete.", "", "Error:"}, wrapFailure(m.failure, width-6)...)
+	lines = append(lines, "", "esc close")
+	return panel("COMPOSE OPERATION FAILED", strings.Join(lines, "\n"), width)
+}
+
+func wrapFailure(value string, width int) []string {
+	words := strings.Fields(ui.SanitizeLine(value))
+	if len(words) == 0 {
+		return []string{"—"}
+	}
+	lines, line := make([]string, 0, 4), ""
+	for _, word := range words {
+		candidate := strings.TrimSpace(line + " " + word)
+		if line != "" && lipgloss.Width(candidate) > width {
+			lines = append(lines, line)
+			line = word
+			continue
+		}
+		line = candidate
+	}
+	if line != "" {
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 func (m Model) configEditorView() string {

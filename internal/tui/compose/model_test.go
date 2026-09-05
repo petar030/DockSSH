@@ -221,7 +221,7 @@ func TestCommandsProjectSpecJobsAndErrors(t *testing.T) {
 	m.openOverlay(downOverlay)
 	m, command = m.submitOverlay()
 	m, _ = m.Update(firstMessage(command))
-	if !strings.Contains(m.notice, "already running") || m.overlay != downOverlay {
+	if !strings.Contains(m.notice, "already running") || m.overlay != failureOverlay || !strings.Contains(m.failure, "already running") {
 		t.Fatalf("job failure=%q overlay=%v", m.notice, m.overlay)
 	}
 }

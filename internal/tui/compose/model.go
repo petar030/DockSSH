@@ -68,6 +68,7 @@ const (
 	logsOverlay
 	newConfigOverlay
 	configEditorOverlay
+	failureOverlay
 )
 
 type Model struct {
@@ -105,6 +106,7 @@ type Model struct {
 	optionB     bool
 	pending     bool
 	notice      string
+	failure     string
 
 	editor           textarea.Model
 	editorProject    string
@@ -187,6 +189,9 @@ func (m Model) Help() string {
 	}
 	if m.overlay == configEditorOverlay {
 		return "ctrl+s save │ esc cancel │ arrows/pgup/pgdn move │ ctrl+v paste"
+	}
+	if m.overlay == failureOverlay {
+		return "esc close"
 	}
 	if m.overlay != noOverlay {
 		return "tab next field │ enter submit │ esc cancel"
