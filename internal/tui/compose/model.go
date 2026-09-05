@@ -191,7 +191,7 @@ func (m Model) Help() string {
 	if m.overlay != noOverlay {
 		return "tab next field │ enter submit │ esc cancel"
 	}
-	return "↑↓ Move │ pgup/pgdn Details │ f Filter │ n New config │ E Edit config │ s Start │ x Stop │ e Restart │ p/P Pause/Unpause │ c Scale │ u Up │ d Down │ o Pull │ b Build │ l Logs"
+	return "↑↓/pgup Move/Details·f Filter·n/E Config·s/x/e Start/Stop/Restart·p/P Pause·c Scale·u/d Up/Down·o Pull·b Build·l Logs"
 }
 func (m Model) Status() string {
 	if m.notice != "" {
