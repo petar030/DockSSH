@@ -566,12 +566,9 @@ destructive commands still require confirmation.
 
 ### Resolved TUI/SSH product decisions
 
-- Client authentication is deferred. Until it exists, the SSH server binds to
-  loopback by default and must not silently expose Docker control on a public
-  interface. A persistent generated server host key is still required because
-  host identity is separate from client authentication.
-- There is no separate direct local-terminal application mode. Development and
-  manual testing use the same Wish/SSH path as production, initially through
+- Client authentication is supported via passwords (bcrypt hashes) and SSH public keys. By default (no auth configured), the SSH server binds only to the loopback interface (`127.0.0.1:23234`) for local access. Once authentication is configured, the server allows listening on public interfaces (`0.0.0.0:23234`).
+- Authentication and persistent settings are managed through a local host-side setup TUI command (`ssh-docker-tui-config`). This setup utility is not exposed over SSH, ensuring an isolated administrative boundary.
+- There is no separate direct local-terminal application mode for Docker management. The local terminal is only used for the configuration setup; Docker management always uses the Wish/SSH path.
   loopback.
 - The initial responsive layout, 80x24 minimum and provisional key map are
   defined above and may be refined during page implementation.
