@@ -150,6 +150,27 @@ func (m *Model) merge(values []row) {
 	m.rows = out
 	m.clampScroll()
 }
+
+func (m Model) matches(value row) bool {
+	fields := []string{value.resource, value.id, value.action, value.project}
+	for index, filter := range m.filters {
+		if filter != "" && fields[index] != filter {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *Model) filterRows() {
+	filtered := m.rows[:0]
+	for _, value := range m.rows {
+		if m.matches(value) {
+			filtered = append(filtered, value)
+		}
+	}
+	m.rows = filtered
+	m.clampScroll()
+}
 func rowKey(v row) string {
 	return v.occurred.UTC().Format(time.RFC3339Nano) + "\x00" + v.resource + "\x00" + v.id + "\x00" + v.project + "\x00" + v.action
 }

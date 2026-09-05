@@ -105,6 +105,18 @@ func TestFilterReplacementClosesOldThenRefreshes(t *testing.T) {
 	}
 }
 
+func TestRecentWindowIsFilteredAfterHandover(t *testing.T) {
+	m := Model{filters: [4]string{"container", "", "start", ""}}
+	now := time.Now()
+	m = m.apply(backend.EventEnvelope{Time: now, Payload: backendevents.RecentUpdated{Events: []backendevents.Record{
+		{OccurredAt: now, Resource: "container", Action: "start", ResourceID: "keep"},
+		{OccurredAt: now.Add(-time.Second), Resource: "image", Action: "tag", ResourceID: "drop"},
+	}}})
+	if len(m.rows) != 1 || m.rows[0].id != "keep" {
+		t.Fatalf("filtered recent rows = %+v", m.rows)
+	}
+}
+
 func TestFailedFilterReplacementKeepsOldSubscription(t *testing.T) {
 	b := &fakeBackend{}
 	m := ready(t, b)

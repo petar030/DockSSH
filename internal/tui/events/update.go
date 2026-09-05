@@ -106,7 +106,10 @@ func (m Model) apply(e backend.EventEnvelope) Model {
 	case backendevents.RecentUpdated:
 		v := make([]row, 0, len(p.Events))
 		for _, x := range p.Events {
-			v = append(v, row{x.Sequence, x.ReceivedAt, x.OccurredAt, x.Resource, x.ResourceID, x.Project, x.Action, clone(x.Attributes)})
+			value := row{x.Sequence, x.ReceivedAt, x.OccurredAt, x.Resource, x.ResourceID, x.Project, x.Action, clone(x.Attributes)}
+			if m.matches(value) {
+				v = append(v, value)
+			}
 		}
 		m.merge(v)
 		m.hasData, m.loading, m.stale, m.err, m.updatedAt = true, false, false, nil, e.Time
@@ -134,6 +137,7 @@ func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		if key == "enter" {
 			m.filters = m.edits
+			m.filterRows()
 			m.filtering = false
 			m.loading = true
 			m.subscriptionGen++
