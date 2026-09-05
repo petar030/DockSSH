@@ -366,6 +366,9 @@ func (app *App) render() string {
 		renderFooter(app.width, status, pageHelp, app.jobHelp(globalHelp)),
 	}, "\n")
 	if app.jobs.CapturesInput() {
+		if failure := app.jobs.FailurePrompt(app.width); failure != "" {
+			return ui.OverlayCentered(rendered, failure, app.width, app.height)
+		}
 		return ui.OverlayCentered(rendered, app.jobs.View(app.width), app.width, app.height)
 	}
 	return rendered

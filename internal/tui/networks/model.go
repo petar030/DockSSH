@@ -58,6 +58,7 @@ type Model struct {
 	detailsID                                                  string
 	connections                                                backendnetworks.ConnectionsUpdated
 	showConnections, targetLoading                             bool
+	connectionsStart                                           int
 	targetErr                                                  error
 	overlay                                                    overlayMode
 	field                                                      int
@@ -103,9 +104,9 @@ func (m Model) SetSize(w, h int) Model {
 	return m
 }
 func (m Model) Active() bool        { return m.active }
-func (m Model) CapturesInput() bool { return m.overlay != noOverlay }
+func (m Model) CapturesInput() bool { return m.overlay != noOverlay || m.pending }
 func (m Model) Activity() string {
-	if m.loading {
+	if m.loading || m.pending {
 		return m.spinner.View()
 	}
 	return ""
@@ -114,7 +115,7 @@ func (m Model) Help() string {
 	if m.overlay != noOverlay {
 		return "tab next field │ enter submit │ esc cancel"
 	}
-	return "↑↓ Move │ f Filter │ i Details │ a Connections │ c Create │ n Connect │ x Disconnect │ d Remove │ p Prune"
+	return "↑↓ Move │ f Filter │ i Details │ a Connections (j/k scroll) │ c Create │ n Connect │ x Disconnect │ d Remove │ p Prune"
 }
 func (m Model) Status() string {
 	if m.notice != "" {
@@ -125,6 +126,9 @@ func (m Model) Status() string {
 	}
 	if m.loading {
 		return "Refreshing networks"
+	}
+	if m.pending {
+		return "Working…"
 	}
 	if m.err != nil {
 		return "Network data may be stale"

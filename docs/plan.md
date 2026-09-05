@@ -575,8 +575,7 @@ destructive commands still require confirmation.
   loopback.
 - The initial responsive layout, 80x24 minimum and provisional key map are
   defined above and may be refined during page implementation.
-- Container inspect environment entries show names and values. Image inspect
-  entries show names but mask values in v1.
+- Container and image inspect environment entries show names and values.
 - The Events page has no pause action and no paused-event buffer. It continually
   consumes live events while active; clear remains session-local.
 - Locally initiated jobs appear in a compact global footer summary. Selecting
@@ -931,9 +930,11 @@ Immediately after the initial Compose page is implemented, a separate Slice
 3.5 will add configuration authoring. It is intentionally not part of Slice 3:
 it changes the backend as well as the TUI. The TUI will use Bubble Tea's
 text-area component to edit YAML starting from a preconfigured Compose
-template. Before sending anything to the backend, the TUI will perform a YAML
-syntax check and keep invalid content in the editor with a clear validation
-error. The backend will then validate the path/write boundary beneath
+template. The first iteration does not ask the user for a filesystem path: it
+derives `<ComposeRoot>/<project>/compose.yaml` beneath the configured root.
+Before sending anything to the backend, the TUI will perform a YAML syntax
+check and keep invalid content in the editor with a clear validation error.
+The backend will validate that derived path/write boundary beneath
 `ComposeRoots`, create or replace the file atomically where possible, and only
 the saved valid configuration will be converted into the existing
 `ProjectSpec`/`Up` job pipeline. Creation/editing, save failures, path

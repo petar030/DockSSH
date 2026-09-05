@@ -81,6 +81,13 @@ func ready(t *testing.T) (Model, *fakeBackend, *fakeAPI) {
 	return m, b, a
 }
 func key(v string) tea.KeyPressMsg { return tea.KeyPressMsg(tea.Key{Text: v, Code: []rune(v)[0]}) }
+func commandMessage(command tea.Cmd) tea.Msg {
+	message := command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		return batch[0]()
+	}
+	return message
+}
 func TestTargetsAddressesOverflowAndCleanup(t *testing.T) {
 	m, b, a := ready(t)
 	m, c := m.handleEvent(backend.EventEnvelope{Payload: backendnetworks.ListUpdated{Networks: []backendnetworks.Summary{{ID: "1", Name: "alpha"}, {ID: "2", Name: "beta"}}}})
@@ -91,6 +98,7 @@ func TestTargetsAddressesOverflowAndCleanup(t *testing.T) {
 	}
 	m.showConnections = true
 	m.selected = "1"
+	m, _ = m.handleEvent(backend.EventEnvelope{Key: backend.RefreshKey{Kind: backendnetworks.RefreshKindDetails, ID: "1"}, Payload: backendnetworks.DetailsUpdated{Network: backendnetworks.Details{Summary: backendnetworks.Summary{ID: "1", Name: "alpha"}}}})
 	m, _ = m.handleEvent(backend.EventEnvelope{Key: backend.RefreshKey{Kind: backendnetworks.RefreshKindConnections, ID: "1"}, Payload: backendnetworks.ConnectionsUpdated{NetworkID: "1", Connections: []backendnetworks.Connection{{ContainerName: "c", MACAddress: "", IPv4Address: "10.0.0.2/24"}}}})
 	view := m.SetSize(120, 25).View()
 	if !strings.Contains(view, "10.0.0") || !strings.Contains(view, "—") {
@@ -119,14 +127,14 @@ func TestFormsShapesSafePruneAndConflict(t *testing.T) {
 	}
 	m.fields[0] = "24h"
 	m, c = m.handleOverlay(key("enter"))
-	m, _ = m.Update(c())
+	m, _ = m.Update(commandMessage(c))
 	if len(a.prunes) != 1 || a.prunes[0].Until != "24h" {
 		t.Fatalf("prune=%+v", a.prunes)
 	}
 	m.overlay = connectOverlay
 	m.fields = [8]string{"container", "10.0.0.5", "fd00::5", "one,two", "4"}
 	m, c = m.handleOverlay(key("enter"))
-	m, _ = m.Update(c())
+	m, _ = m.Update(commandMessage(c))
 	if len(a.connects) != 1 || len(a.connects[0].Aliases) != 2 || a.connects[0].GwPriority != 4 {
 		t.Fatalf("connect=%+v", a.connects)
 	}
@@ -134,14 +142,14 @@ func TestFormsShapesSafePruneAndConflict(t *testing.T) {
 	m.fields[0] = "container"
 	m.disconnectForce = true
 	m, c = m.handleOverlay(key("enter"))
-	m, _ = m.Update(c())
+	m, _ = m.Update(commandMessage(c))
 	if len(a.disconnects) != 1 || !a.disconnects[0].Force {
 		t.Fatalf("disconnect=%+v", a.disconnects)
 	}
 	a.err = &backend.AppError{Code: backend.ErrorConflict, Operation: "remove"}
 	m.overlay = removeOverlay
 	m, c = m.handleOverlay(key("y"))
-	m, _ = m.Update(c())
+	m, _ = m.Update(commandMessage(c))
 	if !strings.Contains(m.notice, "active endpoints") {
 		t.Fatalf("conflict=%q", m.notice)
 	}
@@ -157,7 +165,7 @@ func TestCreateIdentityAndSanitizeLayouts(t *testing.T) {
 	m.overlay = createOverlay
 	m.fields = [8]string{"fixture", "bridge", "local", "test", "yes", "com.docker.network.bridge.name", "10.20.0.0/24", "10.20.0.1"}
 	m, c := m.handleOverlay(key("enter"))
-	m, _ = m.Update(c())
+	m, _ = m.Update(commandMessage(c))
 	if len(a.creates) != 1 || a.creates[0].IPAM[0].Subnet != "10.20.0.0/24" {
 		t.Fatalf("create=%+v", a.creates)
 	}

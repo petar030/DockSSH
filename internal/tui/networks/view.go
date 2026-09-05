@@ -72,13 +72,15 @@ func (m Model) detailView(w int) string {
 	}
 	if m.showConnections {
 		rows := []string{"CONTAINER       MAC                IPv4                 IPv6"}
-		for _, c := range m.connections.Connections {
+		start := min(m.connectionsStart, max(len(m.connections.Connections)-m.connectionRows(), 0))
+		end := min(start+m.connectionRows(), len(m.connections.Connections))
+		for _, c := range m.connections.Connections[start:end] {
 			rows = append(rows, cell(first(c.ContainerName, short(c.ContainerID)), 16)+cell(unknown(c.MACAddress), 19)+cell(unknown(c.IPv4Address), 21)+unknown(c.IPv6Address))
 		}
 		if len(m.connections.Connections) == 0 {
 			rows = append(rows, "No connected containers.")
 		}
-		return panel("CONNECTIONS", strings.Join(rows, "\n"), w)
+		return panel("CONNECTIONS  j/k scroll", strings.Join(rows, "\n"), w)
 	}
 	if m.detailsID != m.selected {
 		return panel("NETWORK DETAILS", "Waiting for details…", w)

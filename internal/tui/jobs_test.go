@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,7 +43,7 @@ func TestJobTrackerProgressCompletionAndDuplicateRegistration(t *testing.T) {
 	}
 	finished := batch[1]().(jobFinishedMsg)
 	tracker.Update(finished)
-	if !tracker.jobs[job.id].done || tracker.Summary() == "" {
+	if !tracker.jobs[job.id].done || tracker.Summary() != "" {
 		t.Fatal("job terminal result was not retained")
 	}
 }
@@ -56,6 +57,19 @@ func TestJobTrackerFailureAndConfirmedCancel(t *testing.T) {
 	tracker.Update(batch[1]())
 	if tracker.jobs[job.id].err == nil {
 		t.Fatal("job failure was lost")
+	}
+	if summary := tracker.Summary(); summary != "" {
+		t.Fatalf("completed job must not occupy the footer: %q", summary)
+	}
+	if view := tracker.View(80); !strings.Contains(view, "Error:") || !strings.Contains(view, "pull failed") {
+		t.Fatalf("job error is not readable in the jobs overlay: %s", view)
+	}
+	if prompt := tracker.FailurePrompt(80); !strings.Contains(prompt, "JOB FAILED") || !strings.Contains(prompt, "pull failed") {
+		t.Fatalf("job failure prompt is missing: %s", prompt)
+	}
+	tracker.HandleKey("esc")
+	if tracker.FailurePrompt(80) != "" {
+		t.Fatal("failure prompt did not dismiss")
 	}
 
 	running := newFakeJob("job-running")

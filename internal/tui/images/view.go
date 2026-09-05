@@ -36,8 +36,19 @@ func (model Model) View() string {
 func (model Model) listView(width, height int) string {
 	values := model.visible()
 	inner := max(width-4, 1)
-	rows := []string{"Filter: " + cell(model.filter, max(inner-28, 8)) + "  Kind: " + model.danglingName() + "  Sort: " + model.sortName(), "", lipgloss.NewStyle().Foreground(ui.Primary).Render("  " + cell("REPOSITORY:TAG", max(inner*38/100, 16)) + " " + cell("IMAGE ID", 12) + " " + cell("SIZE", 10) + " " + cell("CREATED", 16) + " USED")}
-	capacity := max(height-6, 1)
+	// Keep the active sort visible even on narrow terminals. The filter gets
+	// its own row instead of consuming the metadata row.
+	rows := make([]string, 0, 6)
+	if model.notice != "" {
+		rows = append(rows, ui.ErrorNotice(model.notice, inner), "")
+	}
+	rows = append(rows,
+		"Kind: "+model.danglingName()+"  Sort: "+model.sortName(),
+		"Filter: "+cell(model.filter, max(inner-8, 8)),
+		"",
+		lipgloss.NewStyle().Foreground(ui.Primary).Render("  "+cell("REPOSITORY:TAG", max(inner*38/100, 16))+" "+cell("IMAGE ID", 12)+" "+cell("SIZE", 10)+" "+cell("CREATED", 16)+" USED"),
+	)
+	capacity := max(height-len(rows)-3, 1)
 	start := max(0, min(model.listStart, max(len(values)-capacity, 0)))
 	end := min(start+capacity, len(values))
 	for _, value := range values[start:end] {
@@ -77,9 +88,9 @@ func (model Model) detailView(width int) string {
 	d := model.details
 	lines := []string{"ID:           " + shortID(d.ID), "Tags:         " + dash(strings.Join(d.RepoTags, ", ")), "Created:      " + timeText(d.Created), "Size:         " + ui.FormatBytes(d.Size), "Platform:     " + dash(d.OS+"/"+d.Architecture), "Author:       " + dash(d.Author), "User:         " + dash(d.User), "Working dir:  " + dash(d.WorkingDir), "Ports:        " + dash(strings.Join(d.ExposedPorts, ", ")), "Driver:       " + dash(d.GraphDriver)}
 	if len(d.Environment) > 0 {
-		lines = append(lines, "", "Environment (values masked):")
+		lines = append(lines, "", "Environment:")
 		for _, entry := range d.Environment {
-			lines = append(lines, "  "+maskEnvironment(entry))
+			lines = append(lines, "  "+safe(entry))
 		}
 	}
 	if len(d.Labels) > 0 {
@@ -120,9 +131,9 @@ func (model Model) overlayView() string {
 	case removeOverlay:
 		return panel("REMOVE IMAGE", "Remove "+safe(imageName(model.selectedSummary()))+"?\n\n[f] force: "+fmt.Sprint(model.removeForce)+"\n[c] prune children: "+fmt.Sprint(model.removeParents)+"\n\ny/enter confirm   n/esc cancel", width)
 	case pruneOverlay:
-		return panel("PRUNE IMAGES", "At least one scope is required. dangling=false is never submitted.\n\n[d] dangling=true: "+fmt.Sprint(model.pruneDangling)+"\n"+field("Until", model.editPrimary, model.field == 0)+"\n"+field("Label key", model.editLabelKey, model.field == 1)+"\n"+field("Label value", model.editLabelVal, model.field == 2)+"\n\ntab field   enter submit   esc cancel\n"+notice(model.notice, width), width)
+		return panel("PRUNE DANGLING IMAGES", "Removes dangling images only. Both filters are optional.\n\n"+field("Older than (example: 24h)", model.editPrimary, model.field == 0)+"\n"+field("Label (example: team=dev)", model.editSecondary, model.field == 1)+"\n\ntab field   enter prune   esc cancel\n"+notice(model.notice, width), width)
 	case pullOverlay:
-		return panel("PULL IMAGE", field("Reference", model.editPrimary, model.field == 0)+"\n"+field("Platform os/arch[/variant]", model.editSecondary, model.field == 1)+"\n\ntab field   enter start job   esc cancel\n"+notice(model.notice, width), width)
+		return panel("PULL IMAGE", field("Reference", model.editPrimary, model.field == 0)+"\n"+field("Platform os/arch[/variant]", model.editSecondary, model.field == 1)+"\n\ntab field   enter start   esc cancel\n"+notice(model.notice, width), width)
 	}
 	return ""
 }
@@ -134,13 +145,6 @@ func (model Model) selectedSummary() backendimages.Summary {
 		}
 	}
 	return backendimages.Summary{}
-}
-func maskEnvironment(value string) string {
-	key, _, ok := strings.Cut(value, "=")
-	if !ok {
-		return safe(value)
-	}
-	return safe(key) + "=••••"
 }
 func sortedMap(values map[string]string) []string {
 	keys := make([]string, 0, len(values))

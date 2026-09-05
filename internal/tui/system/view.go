@@ -103,7 +103,7 @@ func usage(name string, v backendsystem.ResourceDiskUsage) string {
 func (m Model) overlayView() string {
 	w := max(min(m.width-12, 86), 52)
 	if m.overlay == pruneMenu {
-		return panel("PRUNE OPTIONS", "Choose a deliberately scoped operation:\n\n[c] stopped containers\n[i] images\n[v] volumes\n[n] networks\n[s] ALL unused Docker resources (policy-gated)\n\nesc cancel", w)
+		return panel("CLEAN UP DOCKER", "Choose the resource type first. Each option opens a scoped form; nothing is removed from this menu.\n\n[c] stopped containers\n[i] images\n[v] volumes\n[n] networks\n[s] all unused Docker resources (policy-gated)\n\nesc cancel", w)
 	}
 	if m.overlay == systemPrune {
 		policy := ""
@@ -113,7 +113,8 @@ func (m Model) overlayView() string {
 		return panel("DANGER: SYSTEM PRUNE", "This can remove all unused containers, networks, images and build cache.\nType exactly:\n"+backendsystem.SystemPruneConfirmation+"\n\n> "+safe(m.fields[0])+"_\n[v] include volumes: "+fmt.Sprint(m.includeVolumes)+policy+"\n\nenter submit   esc cancel\n"+notice(m.notice, w), w)
 	}
 	title := "PRUNE"
-	copy := "Until and/or a label is required."
+	copy := "At least one filter is required."
+	fieldNames := []string{"Older than", "Label key", "Label value"}
 	if m.overlay == containerPrune {
 		title = "PRUNE STOPPED CONTAINERS"
 	}
@@ -122,15 +123,23 @@ func (m Model) overlayView() string {
 	}
 	if m.overlay == imagePrune {
 		title = "PRUNE IMAGES"
-		copy = "Dangling=true, until, or a label is required."
+		copy = "Only dangling images are eligible when enabled. Filters are optional."
 	}
 	if m.overlay == volumePrune {
 		title = "PRUNE VOLUMES"
 		copy = "A label is always required. All only broadens matching named volumes."
+		fieldNames = []string{"Label key", "Label value"}
 	}
-	lines := fields([]string{"Until", "Label key", "Label value"}, m.fields[:], m.field)
+	if m.overlay == containerPrune || m.overlay == networkPrune {
+		copy = "Older than and/or a label is required."
+	}
+	fieldValues := m.fields[:]
+	if m.overlay == volumePrune {
+		fieldValues = m.fields[:2]
+	}
+	lines := fields(fieldNames, fieldValues, m.field)
 	if m.overlay == imagePrune {
-		lines += "\n[d] dangling=true: " + fmt.Sprint(m.dangling)
+		lines = "[d] dangling images only: " + fmt.Sprint(m.dangling) + "\n" + lines
 	}
 	if m.overlay == volumePrune {
 		lines += "\n[a] all named: " + fmt.Sprint(m.allVolumes)

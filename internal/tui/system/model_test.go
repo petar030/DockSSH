@@ -82,6 +82,13 @@ func ready(t *testing.T) (Model, *fakeBackend, *fakeAPI) {
 	return m, b, a
 }
 func key(v string) tea.KeyPressMsg { return tea.KeyPressMsg(tea.Key{Text: v, Code: []rune(v)[0]}) }
+func commandMessage(command tea.Cmd) tea.Msg {
+	message := command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		return batch[0]()
+	}
+	return message
+}
 
 func TestInfoDiskKeyOverflowPreservesAndSanitizes(t *testing.T) {
 	m, b, a := ready(t)
@@ -131,30 +138,30 @@ func TestEveryScopedPruneGuardAndShapes(t *testing.T) {
 	m.openForm(containerPrune)
 	m.fields[0] = "24h"
 	m, c := m.handleOverlay(key("enter"))
-	m, _ = m.Update(c())
+	m, _ = m.Update(commandMessage(c))
 	if len(a.container) != 1 || a.container[0].Until != "24h" {
 		t.Fatalf("container=%+v", a.container)
 	}
 	m.openForm(imagePrune)
 	m.dangling = true
 	m, c = m.handleOverlay(key("enter"))
-	m, _ = m.Update(c())
+	m, _ = m.Update(commandMessage(c))
 	if len(a.image) != 1 || a.image[0].Dangling == nil || !*a.image[0].Dangling {
 		t.Fatalf("image=%+v", a.image)
 	}
 	m.openForm(volumePrune)
-	m.fields[1] = "fixture"
-	m.fields[2] = "yes"
+	m.fields[0] = "fixture"
+	m.fields[1] = "yes"
 	m.allVolumes = true
 	m, c = m.handleOverlay(key("enter"))
-	m, _ = m.Update(c())
+	m, _ = m.Update(commandMessage(c))
 	if len(a.volume) != 1 || !a.volume[0].All || a.volume[0].Labels["fixture"] != "yes" {
 		t.Fatalf("volume=%+v", a.volume)
 	}
 	m.openForm(networkPrune)
 	m.fields[1] = "fixture"
 	m, c = m.handleOverlay(key("enter"))
-	m, _ = m.Update(c())
+	m, _ = m.Update(commandMessage(c))
 	if len(a.network) != 1 {
 		t.Fatal("network prune missing")
 	}
@@ -172,7 +179,7 @@ func TestSystemTokenPolicyReportAndJoinedOutcome(t *testing.T) {
 	m.fields[0] = backendsystem.SystemPruneConfirmation
 	m.includeVolumes = true
 	m, c = m.handleOverlay(key("enter"))
-	m, _ = m.Update(c())
+	m, _ = m.Update(commandMessage(c))
 	if !m.systemPruneDenied || m.overlay != systemPrune || len(a.system) != 1 {
 		t.Fatal("policy denial not retained")
 	}
@@ -182,7 +189,7 @@ func TestSystemTokenPolicyReportAndJoinedOutcome(t *testing.T) {
 	m.openForm(containerPrune)
 	m.fields[0] = "24h"
 	m, c = m.handleOverlay(key("enter"))
-	m, disk := m.Update(c())
+	m, disk := m.Update(commandMessage(c))
 	if !m.reportVisible || !strings.Contains(m.reportView(), "1.0 KiB") || disk == nil {
 		t.Fatal("typed report not shown")
 	}
@@ -191,7 +198,7 @@ func TestSystemTokenPolicyReportAndJoinedOutcome(t *testing.T) {
 	m.openForm(containerPrune)
 	m.fields[0] = "24h"
 	m, c = m.handleOverlay(key("enter"))
-	m, _ = m.Update(c())
+	m, _ = m.Update(commandMessage(c))
 	if !strings.Contains(m.notice, "final disk state uncertain") || !m.stale {
 		t.Fatalf("joined outcome=%q", m.notice)
 	}

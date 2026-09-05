@@ -105,11 +105,8 @@ type Model struct {
 
 	editPrimary   string
 	editSecondary string
-	editLabelKey  string
-	editLabelVal  string
 	removeForce   bool
 	removeParents bool
-	pruneDangling bool
 	pending       bool
 	notice        string
 	remoteJob     backend.JobProgressed
@@ -157,9 +154,9 @@ func (model Model) SetSize(width, height int) Model {
 }
 
 func (model Model) Active() bool        { return model.active }
-func (model Model) CapturesInput() bool { return model.overlay != noOverlay }
+func (model Model) CapturesInput() bool { return model.overlay != noOverlay || model.pending }
 func (model Model) Activity() string {
-	if model.loading {
+	if model.loading || model.pending {
 		return model.spinner.View()
 	}
 	return ""
@@ -176,6 +173,9 @@ func (model Model) Status() string {
 	}
 	if model.loading && !model.hasData {
 		return "Loading images"
+	}
+	if model.pending {
+		return "Working…"
 	}
 	if model.loading {
 		return "Refreshing images"

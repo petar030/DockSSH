@@ -121,7 +121,7 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 			m.notice = ""
 		}
 	default:
-		if m.loading {
+		if m.loading || m.pending {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(message)
 			return m, cmd
@@ -170,13 +170,24 @@ func (m Model) handleEvent(event backend.EventEnvelope) (Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
+	if m.pending {
+		return m, nil
+	}
 	if m.overlay != noOverlay {
 		return m.handleOverlay(k)
 	}
 	switch k.String() {
 	case "up", "k":
+		if m.showAttachments {
+			m.attachmentsStart = max(0, m.attachmentsStart-1)
+			return m, nil
+		}
 		return m.move(-1)
 	case "down", "j":
+		if m.showAttachments {
+			m.attachmentsStart = min(m.attachmentsStart+1, max(len(m.attachments.Attachments)-m.attachmentRows(), 0))
+			return m, nil
+		}
 		return m.move(1)
 	case "f":
 		m.filterEdit, m.overlay = m.filter, filterOverlay
@@ -184,7 +195,7 @@ func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.showAttachments = false
 		return m.load(backendvolumes.RefreshKindDetails)
 	case "a":
-		m.showAttachments = true
+		m.showAttachments, m.attachmentsStart = true, 0
 		return m.load(backendvolumes.RefreshKindAttachments)
 	case "c":
 		if !m.pending {
@@ -290,9 +301,18 @@ func (m Model) move(delta int) (Model, tea.Cmd) {
 	m.selected = v[i].Name
 	m.selectionGen++
 	m.showAttachments = false
+	m.attachmentsStart = 0
 	m.targetLoading = true
 	m.ensureVisible()
 	return m, requestTarget(m.api, m.generation, m.selectionGen, backend.RefreshKey{Kind: backendvolumes.RefreshKindDetails, ID: m.selected})
+}
+
+func (m Model) attachmentRows() int {
+	height := m.height
+	if m.width < 110 {
+		height = max(height-max(height/2, 8), 1)
+	}
+	return max(height-5, 1)
 }
 func (m Model) load(kind backend.RefreshKind) (Model, tea.Cmd) {
 	if m.selected == "" {
@@ -309,7 +329,7 @@ func (m Model) run(selected string, reopen overlayMode, fn func(context.Context)
 	m.pending = true
 	m.notice = ""
 	g, ctx := m.generation, m.pageCtx
-	return m, func() tea.Msg { _, e := fn(ctx); return commandFinishedMsg{g, selected, reopen, e} }
+	return m, tea.Batch(func() tea.Msg { _, e := fn(ctx); return commandFinishedMsg{g, selected, reopen, e} }, m.spinner.Tick)
 }
 func (m Model) current(g uint64) bool { return m.active && m.generation == g }
 func (m *Model) applyError(key backend.RefreshKey, e error) {

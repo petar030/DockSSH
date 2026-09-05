@@ -119,7 +119,7 @@ func (model Model) Update(message tea.Msg) (Model, tea.Cmd) {
 		}
 		model.pending = false
 		if message.err != nil {
-			model.notice = errorText(message.err)
+			model.notice = commandErrorText(message.reopen, message.err)
 			if backend.HasErrorCode(message.err, backend.ErrorInvalidInput) {
 				model.overlay = message.reopen
 			}
@@ -145,7 +145,7 @@ func (model Model) Update(message tea.Msg) (Model, tea.Cmd) {
 			return model, model.jobs.Register(message.job, "pull image")
 		}
 	default:
-		if model.loading {
+		if model.loading || model.pending {
 			var command tea.Cmd
 			model.spinner, command = model.spinner.Update(message)
 			return model, command
@@ -210,6 +210,9 @@ func (model Model) handleEvent(event backend.EventEnvelope) (Model, tea.Cmd) {
 
 func (model Model) handleKey(message tea.KeyPressMsg) (Model, tea.Cmd) {
 	key := message.String()
+	if model.pending {
+		return model, nil
+	}
 	if model.overlay != noOverlay {
 		return model.handleOverlay(message)
 	}
@@ -248,7 +251,7 @@ func (model Model) handleKey(message tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 	case "p":
 		if !model.pending {
-			model.overlay, model.editPrimary, model.editLabelKey, model.editLabelVal, model.pruneDangling = pruneOverlay, "", "", "", false
+			model.overlay, model.field, model.editPrimary, model.editSecondary = pruneOverlay, 0, "", ""
 		}
 	case "u":
 		if !model.pending {
@@ -282,15 +285,9 @@ func (model Model) handleOverlay(message tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		return model, nil
 	}
-	if model.overlay == pruneOverlay && key == "d" {
-		model.pruneDangling = !model.pruneDangling
-		return model, nil
-	}
 	if key == "tab" {
-		if model.overlay == pullOverlay {
+		if model.overlay == pullOverlay || model.overlay == pruneOverlay {
 			model.field = (model.field + 1) % 2
-		} else if model.overlay == pruneOverlay {
-			model.field = (model.field + 1) % 3
 		}
 		return model, nil
 	}
@@ -312,17 +309,13 @@ func (model Model) handleOverlay(message tea.KeyPressMsg) (Model, tea.Cmd) {
 				return model.api.Tag(ctx, model.selected, backendimages.TagOptions{Reference: ref})
 			})
 		case pruneOverlay:
-			labels := oneLabel(model.editLabelKey, model.editLabelVal)
-			if !model.pruneDangling && strings.TrimSpace(model.editPrimary) == "" && len(labels) == 0 {
-				model.notice = "Choose dangling=true, until, or a label"
+			labels, err := pruneLabel(model.editSecondary)
+			if err != nil {
+				model.notice = err.Error()
 				return model, nil
 			}
-			var dangling *bool
-			if model.pruneDangling {
-				value := true
-				dangling = &value
-			}
-			opts := backendimages.PruneOptions{Dangling: dangling, Until: strings.TrimSpace(model.editPrimary), Labels: labels}
+			dangling := true
+			opts := backendimages.PruneOptions{Dangling: &dangling, Until: strings.TrimSpace(model.editPrimary), Labels: labels}
 			model.overlay = noOverlay
 			return model.runCommand("", pruneOverlay, func(ctx context.Context) (backend.CommandResult, error) { return model.api.Prune(ctx, opts) })
 		case pullOverlay:
@@ -338,10 +331,10 @@ func (model Model) handleOverlay(message tea.KeyPressMsg) (Model, tea.Cmd) {
 			model.pending = true
 			model.notice = ""
 			generation, ctx, api := model.generation, model.pageCtx, model.api
-			return model, func() tea.Msg {
+			return model, tea.Batch(func() tea.Msg {
 				job, err := api.Pull(ctx, ref, backendimages.PullOptions{Platform: platform})
 				return pullStartedMsg{generation: generation, job: job, err: err}
-			}
+			}, model.spinner.Tick)
 		}
 	}
 	if key == "backspace" {
@@ -361,10 +354,10 @@ func (model Model) runCommand(id string, reopen overlayMode, run func(context.Co
 	model.pending = true
 	model.notice = ""
 	generation, ctx := model.generation, model.pageCtx
-	return model, func() tea.Msg {
+	return model, tea.Batch(func() tea.Msg {
 		_, err := run(ctx)
 		return commandFinishedMsg{generation: generation, id: id, reopen: reopen, err: err}
-	}
+	}, model.spinner.Tick)
 }
 func (model Model) move(delta int) (Model, tea.Cmd) {
 	values := model.visible()
@@ -449,10 +442,7 @@ func (model Model) currentEdit() string {
 		if model.field == 0 {
 			return model.editPrimary
 		}
-		if model.field == 1 {
-			return model.editLabelKey
-		}
-		return model.editLabelVal
+		return model.editSecondary
 	}
 	if model.overlay == pullOverlay && model.field == 1 {
 		return model.editSecondary
@@ -465,10 +455,8 @@ func (model *Model) setEdit(v string) {
 	} else if model.overlay == pruneOverlay {
 		if model.field == 0 {
 			model.editPrimary = v
-		} else if model.field == 1 {
-			model.editLabelKey = v
 		} else {
-			model.editLabelVal = v
+			model.editSecondary = v
 		}
 	} else if model.overlay == pullOverlay && model.field == 1 {
 		model.editSecondary = v
@@ -483,12 +471,17 @@ func trimRune(v string) string {
 	}
 	return v[:len(v)-size]
 }
-func oneLabel(key, value string) map[string]string {
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return nil
+func pruneLabel(value string) (map[string]string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
 	}
-	return map[string]string{key: strings.TrimSpace(value)}
+	key, item, found := strings.Cut(value, "=")
+	key = strings.TrimSpace(key)
+	if !found || key == "" {
+		return nil, fmt.Errorf("label must use key=value")
+	}
+	return map[string]string{key: strings.TrimSpace(item)}, nil
 }
 func validPlatform(value string) bool {
 	value = strings.TrimSpace(value)
@@ -519,4 +512,11 @@ func errorText(err error) string {
 		}
 	}
 	return fmt.Sprintf("operation failed: %v", err)
+}
+
+func commandErrorText(operation overlayMode, err error) string {
+	if operation == removeOverlay && backend.HasErrorCode(err, backend.ErrorConflict) {
+		return "Image is still used by a container; stop/remove the container or retry with force"
+	}
+	return errorText(err)
 }

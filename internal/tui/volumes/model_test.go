@@ -79,6 +79,14 @@ func updateReady(m Model, msg tea.Msg) (Model, tea.BatchMsg) {
 }
 func key(v string) tea.KeyPressMsg { return tea.KeyPressMsg(tea.Key{Text: v, Code: []rune(v)[0]}) }
 
+func commandMessage(command tea.Cmd) tea.Msg {
+	message := command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		return batch[0]()
+	}
+	return message
+}
+
 func TestListWarningsUnknownUsageAndKeyedTargets(t *testing.T) {
 	m, b, a := ready(t)
 	m, cmd := m.handleEvent(backend.EventEnvelope{Time: time.Now(), Payload: backendvolumes.ListUpdated{Volumes: []backendvolumes.Volume{{Name: "alpha", UsageKnown: false}, {Name: "beta", UsageKnown: true, Size: 1024}}, Warnings: []string{"warn\nunsafe"}}})
@@ -132,7 +140,7 @@ func TestIdentityFilterCreateRemoveAndSafePrune(t *testing.T) {
 	m.fields[1] = "yes"
 	m.pruneAll = true
 	m, cmd = m.handleOverlay(key("enter"))
-	m, _ = m.Update(cmd())
+	m, _ = m.Update(commandMessage(cmd))
 	if len(a.prunes) != 1 || !a.prunes[0].All || a.prunes[0].Labels["fixture"] != "yes" {
 		t.Fatalf("prune=%+v", a.prunes)
 	}
@@ -140,14 +148,14 @@ func TestIdentityFilterCreateRemoveAndSafePrune(t *testing.T) {
 	m.removeForce = true
 	m.selected = "z"
 	m, cmd = m.handleOverlay(key("y"))
-	m, _ = m.Update(cmd())
+	m, _ = m.Update(commandMessage(cmd))
 	if len(a.removes) != 1 || !a.removes[0].Force {
 		t.Fatalf("remove=%+v", a.removes)
 	}
 	m.overlay = createOverlay
 	m.fields = [6]string{"new", "local", "team", "dev", "type", "none"}
 	m, cmd = m.handleOverlay(key("enter"))
-	m, _ = m.Update(cmd())
+	m, _ = m.Update(commandMessage(cmd))
 	if len(a.creates) != 1 || a.creates[0].Labels["team"] != "dev" || a.creates[0].DriverOptions["type"] != "none" {
 		t.Fatalf("create=%+v", a.creates)
 	}
@@ -161,7 +169,7 @@ func TestConflictStaysSelectedAndLayoutsSanitize(t *testing.T) {
 	a.err = &backend.AppError{Code: backend.ErrorConflict, Operation: "remove"}
 	m.overlay = removeOverlay
 	m, cmd := m.handleOverlay(key("y"))
-	m, _ = m.Update(cmd())
+	m, _ = m.Update(commandMessage(cmd))
 	if m.selected != "v" || !strings.Contains(m.notice, "in use") {
 		t.Fatalf("conflict=%q selected=%q", m.notice, m.selected)
 	}

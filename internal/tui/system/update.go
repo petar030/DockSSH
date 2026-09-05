@@ -153,7 +153,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.reportVisible = true
 		return m, requestDisk(m.api, m.generation)
 	default:
-		if m.loading {
+		if m.loading || m.pending {
 			var c tea.Cmd
 			m.spinner, c = m.spinner.Update(msg)
 			return m, c
@@ -162,6 +162,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	return m, nil
 }
 func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
+	if m.pending {
+		return m, nil
+	}
 	if m.overlay != noOverlay {
 		return m.handleOverlay(k)
 	}
@@ -221,6 +224,8 @@ func (m Model) handleOverlay(k tea.KeyPressMsg) (Model, tea.Cmd) {
 		limit := 3
 		if m.overlay == systemPrune {
 			limit = 1
+		} else if m.overlay == volumePrune {
+			limit = 2
 		}
 		m.field = (m.field + 1) % limit
 		return m, nil
@@ -246,6 +251,7 @@ func (m Model) handleOverlay(k tea.KeyPressMsg) (Model, tea.Cmd) {
 			o := backendsystem.ImagePruneOptions{Dangling: d, Until: strings.TrimSpace(m.fields[0]), Labels: labels}
 			return m.run(imagePrune, func(ctx context.Context) (backendsystem.PruneResult, error) { return m.api.PruneImages(ctx, o) })
 		case volumePrune:
+			labels = pair(m.fields[0], m.fields[1])
 			if len(labels) == 0 {
 				return m.refuse("A label is required; All does not remove this scope")
 			}
@@ -293,7 +299,7 @@ func (m Model) run(kind overlayMode, fn func(context.Context) (backendsystem.Pru
 	m.notice = ""
 	m.overlay = noOverlay
 	g, ctx := m.generation, m.pageCtx
-	return m, func() tea.Msg { r, e := fn(ctx); return pruneFinishedMsg{g, kind, r, e} }
+	return m, tea.Batch(func() tea.Msg { r, e := fn(ctx); return pruneFinishedMsg{g, kind, r, e} }, m.spinner.Tick)
 }
 func (m Model) current(g uint64) bool { return m.active && m.generation == g }
 func pair(k, v string) map[string]string {

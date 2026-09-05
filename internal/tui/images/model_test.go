@@ -168,11 +168,14 @@ func TestOverflowFilterSortAndSafeRendering(t *testing.T) {
 		t.Fatalf("size sort first = %s", got)
 	}
 	view := model.SetSize(120, 25).View()
-	if strings.Contains(view, "secret") || strings.Contains(view, "evil\nkey") || !strings.Contains(view, "TOKEN=••••") {
+	if !strings.Contains(view, "TOKEN=secret") || strings.Contains(view, "evil\nkey") {
 		t.Fatalf("unsafe/missing rendering:\n%s", view)
 	}
 	if narrow := model.SetSize(90, 25).View(); narrow == "" {
 		t.Fatal("narrow layout empty")
+	}
+	if narrow := model.SetSize(90, 25).View(); !strings.Contains(narrow, "Sort:") {
+		t.Fatalf("active sort is hidden on a narrow layout:\n%s", narrow)
 	}
 }
 
@@ -181,27 +184,45 @@ func TestCommandShapesGuardsAndErrors(t *testing.T) {
 	model.selected = "img"
 	model.overlay = pruneOverlay
 	model, cmd := model.handleOverlay(testKey("enter"))
-	if cmd != nil || len(api.prunes) != 0 || model.notice == "" {
-		t.Fatal("empty prune was submitted")
-	}
-	model.pruneDangling = true
-	model, cmd = model.handleOverlay(testKey("enter"))
-	model, _ = model.Update(cmd())
+	model, _ = model.Update(commandMessage(cmd))
 	if len(api.prunes) != 1 || api.prunes[0].Dangling == nil || !*api.prunes[0].Dangling {
-		t.Fatalf("prune options = %+v", api.prunes)
+		t.Fatalf("dangling prune options = %+v", api.prunes)
+	}
+	model.hasData = true
+	model.overlay = pruneOverlay
+	if !strings.Contains(model.SetSize(100, 25).View(), "dangling images") {
+		t.Fatal("prune form does not describe the dangling scope")
+	}
+	model.overlay, model.editSecondary = pruneOverlay, "not-a-label"
+	model, cmd = model.handleOverlay(testKey("enter"))
+	if cmd != nil || !strings.Contains(model.notice, "key=value") {
+		t.Fatalf("invalid label was submitted: %q", model.notice)
+	}
+	model.editSecondary = "team=dev"
+	model, cmd = model.handleOverlay(testKey("enter"))
+	model, _ = model.Update(commandMessage(cmd))
+	if len(api.prunes) != 2 || api.prunes[1].Labels["team"] != "dev" {
+		t.Fatalf("label prune options = %+v", api.prunes)
 	}
 	model.overlay, model.removeForce, model.removeParents = removeOverlay, true, true
 	model, cmd = model.handleOverlay(testKey("y"))
-	model, _ = model.Update(cmd())
+	model, _ = model.Update(commandMessage(cmd))
 	if len(api.removes) != 1 || !api.removes[0].Force || !api.removes[0].PruneChildren {
 		t.Fatalf("remove = %+v", api.removes)
 	}
 	api.err = &backend.AppError{Code: backend.ErrorConflict, Operation: "tag"}
 	model.overlay, model.editPrimary = tagOverlay, "repo:tag"
 	model, cmd = model.handleOverlay(testKey("enter"))
-	model, _ = model.Update(cmd())
+	model, _ = model.Update(commandMessage(cmd))
 	if !strings.Contains(model.notice, "conflict") {
 		t.Fatalf("notice = %q", model.notice)
+	}
+	model.hasData = true
+	if view := model.SetSize(120, 25).View(); !strings.Contains(view, "operation conflicts") {
+		t.Fatalf("command failure is not visible in the page: %s", view)
+	}
+	if text := commandErrorText(removeOverlay, api.err); !strings.Contains(text, "still used by a container") {
+		t.Fatalf("remove error is not actionable: %q", text)
 	}
 	if got := errorText(errors.New("raw")); !strings.Contains(got, "operation failed") {
 		t.Fatalf("fallback = %q", got)
@@ -220,7 +241,7 @@ func TestPullValidationAndTrackerRegistration(t *testing.T) {
 	api.job = job
 	model.editSecondary = "linux/amd64"
 	model, cmd = model.handleOverlay(testKey("enter"))
-	model, register := model.Update(cmd())
+	model, register := model.Update(commandMessage(cmd))
 	if register == nil {
 		t.Fatal("pull handle was not registered")
 	}
@@ -231,7 +252,7 @@ func TestPullValidationAndTrackerRegistration(t *testing.T) {
 	api.err = &backend.AppError{Code: backend.ErrorConflict, Operation: "pull"}
 	model.overlay, model.editPrimary = pullOverlay, "busy"
 	model, cmd = model.handleOverlay(testKey("enter"))
-	model, _ = model.Update(cmd())
+	model, _ = model.Update(commandMessage(cmd))
 	if tracker.registered != 1 || model.overlay != pullOverlay {
 		t.Fatal("conflicted pull registered or closed editor")
 	}
@@ -246,4 +267,12 @@ func (*testJob) Cancel() error                                       { return ni
 
 func testKey(value string) tea.KeyPressMsg {
 	return tea.KeyPressMsg(tea.Key{Text: value, Code: []rune(value)[0]})
+}
+
+func commandMessage(command tea.Cmd) tea.Msg {
+	message := command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		return batch[0]()
+	}
+	return message
 }

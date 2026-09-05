@@ -93,9 +93,9 @@ func (m Model) Refresh() (Model, tea.Cmd) {
 }
 func (m Model) SetSize(w, h int) Model { m.width, m.height = max(w, 0), max(h, 0); return m }
 func (m Model) Active() bool           { return m.active }
-func (m Model) CapturesInput() bool    { return m.overlay != noOverlay }
+func (m Model) CapturesInput() bool    { return m.overlay != noOverlay || m.pending }
 func (m Model) Activity() string {
-	if m.loading {
+	if m.loading || m.pending {
 		return m.spinner.View()
 	}
 	return ""
@@ -115,6 +115,9 @@ func (m Model) Status() string {
 	}
 	if m.loading {
 		return "Refreshing system information"
+	}
+	if m.pending {
+		return "Working…"
 	}
 	if m.err != nil {
 		return "System data may be stale"

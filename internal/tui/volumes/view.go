@@ -79,13 +79,15 @@ func (m Model) detailView(width int) string {
 	}
 	if m.showAttachments {
 		rows := []string{"CONTAINER       STATE       DESTINATION"}
-		for _, a := range m.attachments.Attachments {
+		start := min(m.attachmentsStart, max(len(m.attachments.Attachments)-m.attachmentRows(), 0))
+		end := min(start+m.attachmentRows(), len(m.attachments.Attachments))
+		for _, a := range m.attachments.Attachments[start:end] {
 			rows = append(rows, cell(first(a.ContainerName, short(a.ContainerID)), 16)+cell(a.State, 12)+safe(a.Destination))
 		}
 		if len(m.attachments.Attachments) == 0 {
 			rows = append(rows, "No attached containers.")
 		}
-		return panel("ATTACHMENTS", strings.Join(rows, "\n"), width)
+		return panel("ATTACHMENTS  j/k scroll", strings.Join(rows, "\n"), width)
 	}
 	if m.detailsName != m.selected {
 		return panel("VOLUME DETAILS", "Waiting for details…", width)

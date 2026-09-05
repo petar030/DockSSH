@@ -224,7 +224,8 @@ running Compose configuration files.
       keep the editor open and show a bounded, sanitized validation error
 - [ ] Add backend contracts and implementation for safely creating a new
       Compose file and editing an existing file beneath configured Compose
-      roots, with path and write validation
+      roots, using `<ComposeRoot>/<project>/compose.yaml` by default in the
+      first iteration, with path and write validation
 - [ ] Add an explicit save/create request separate from `Up`, so the backend
       never receives partially edited or syntactically invalid content
 - [ ] Run the saved configuration through the existing Compose `ProjectSpec`

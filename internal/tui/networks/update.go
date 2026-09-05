@@ -120,7 +120,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.notice = ""
 		}
 	default:
-		if m.loading {
+		if m.loading || m.pending {
 			var c tea.Cmd
 			m.spinner, c = m.spinner.Update(msg)
 			return m, c
@@ -166,13 +166,24 @@ func (m Model) handleEvent(e backend.EventEnvelope) (Model, tea.Cmd) {
 	return m, nil
 }
 func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
+	if m.pending {
+		return m, nil
+	}
 	if m.overlay != noOverlay {
 		return m.handleOverlay(k)
 	}
 	switch k.String() {
 	case "up", "k":
+		if m.showConnections {
+			m.connectionsStart = max(0, m.connectionsStart-1)
+			return m, nil
+		}
 		return m.move(-1)
 	case "down", "j":
+		if m.showConnections {
+			m.connectionsStart = min(m.connectionsStart+1, max(len(m.connections.Connections)-m.connectionRows(), 0))
+			return m, nil
+		}
 		return m.move(1)
 	case "f":
 		m.filterEdit, m.overlay = m.filter, filterOverlay
@@ -180,7 +191,7 @@ func (m Model) handleKey(k tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.showConnections = false
 		return m.load(backendnetworks.RefreshKindDetails)
 	case "a":
-		m.showConnections = true
+		m.showConnections, m.connectionsStart = true, 0
 		return m.load(backendnetworks.RefreshKindConnections)
 	case "c":
 		if !m.pending {
@@ -334,9 +345,18 @@ func (m Model) move(d int) (Model, tea.Cmd) {
 	m.selected = v[i].ID
 	m.selectionGen++
 	m.showConnections = false
+	m.connectionsStart = 0
 	m.targetLoading = true
 	m.ensureVisible()
 	return m, requestTarget(m.api, m.generation, m.selectionGen, backend.RefreshKey{Kind: backendnetworks.RefreshKindDetails, ID: m.selected})
+}
+
+func (m Model) connectionRows() int {
+	height := m.height
+	if m.width < 110 {
+		height = max(height-max(height/2, 8), 1)
+	}
+	return max(height-5, 1)
 }
 func (m Model) load(k backend.RefreshKind) (Model, tea.Cmd) {
 	if m.selected == "" {
@@ -353,7 +373,7 @@ func (m Model) run(id string, reopen overlayMode, fn func(context.Context) (back
 	m.pending = true
 	m.notice = ""
 	g, ctx := m.generation, m.pageCtx
-	return m, func() tea.Msg { _, e := fn(ctx); return commandFinishedMsg{g, id, reopen, e} }
+	return m, tea.Batch(func() tea.Msg { _, e := fn(ctx); return commandFinishedMsg{g, id, reopen, e} }, m.spinner.Tick)
 }
 func (m Model) current(g uint64) bool { return m.active && m.generation == g }
 func (m *Model) applyError(k backend.RefreshKey, e error) {

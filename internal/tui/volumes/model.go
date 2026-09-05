@@ -59,6 +59,7 @@ type Model struct {
 	detailsName             string
 	attachments             backendvolumes.AttachmentsUpdated
 	showAttachments         bool
+	attachmentsStart        int
 	targetLoading           bool
 	targetErr               error
 
@@ -106,9 +107,9 @@ func (m Model) SetSize(w, h int) Model {
 	return m
 }
 func (m Model) Active() bool        { return m.active }
-func (m Model) CapturesInput() bool { return m.overlay != noOverlay }
+func (m Model) CapturesInput() bool { return m.overlay != noOverlay || m.pending }
 func (m Model) Activity() string {
-	if m.loading {
+	if m.loading || m.pending {
 		return m.spinner.View()
 	}
 	return ""
@@ -117,7 +118,7 @@ func (m Model) Help() string {
 	if m.overlay != noOverlay {
 		return "tab next field │ enter submit │ esc cancel"
 	}
-	return "↑↓ Move │ f Filter │ i Details │ a Attachments │ c Create │ d Remove │ p Prune"
+	return "↑↓ Move │ f Filter │ i Details │ a Attachments (j/k scroll) │ c Create │ d Remove │ p Prune"
 }
 func (m Model) Status() string {
 	if m.notice != "" {
@@ -128,6 +129,9 @@ func (m Model) Status() string {
 	}
 	if m.loading {
 		return "Refreshing volumes"
+	}
+	if m.pending {
+		return "Working…"
 	}
 	if m.err != nil {
 		return "Volume data may be stale"

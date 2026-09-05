@@ -46,6 +46,7 @@ type jobTracker struct {
 	order         []string
 	overlay       bool
 	confirmCancel bool
+	failureID     string
 	selected      int
 	notice        string
 }
@@ -110,6 +111,10 @@ func (tracker *jobTracker) Update(message tea.Msg) tea.Cmd {
 			return nil
 		}
 		job.result, job.err, job.done = message.result, message.err, true
+		if message.err != nil {
+			tracker.selected = indexOfJob(tracker.order, message.id)
+			tracker.failureID = message.id
+		}
 	case jobCancelFinishedMsg:
 		if message.err != nil {
 			tracker.notice = "Cancel failed: " + message.err.Error()
@@ -121,11 +126,24 @@ func (tracker *jobTracker) Update(message tea.Msg) tea.Cmd {
 }
 
 func (tracker *jobTracker) CapturesInput() bool {
-	return tracker != nil && tracker.overlay
+	return tracker != nil && (tracker.overlay || tracker.failureID != "")
 }
 
 func (tracker *jobTracker) HandleKey(key string) tea.Cmd {
-	if tracker == nil || !tracker.overlay {
+	if tracker == nil {
+		return nil
+	}
+	if tracker.failureID != "" {
+		switch key {
+		case "J":
+			tracker.failureID = ""
+			tracker.overlay = true
+		case "enter", "esc":
+			tracker.failureID = ""
+		}
+		return nil
+	}
+	if !tracker.overlay {
 		return nil
 	}
 	if tracker.confirmCancel {
@@ -170,23 +188,50 @@ func (tracker *jobTracker) Summary() string {
 	if tracker == nil || len(tracker.order) == 0 {
 		return ""
 	}
-	running := 0
-	for _, id := range tracker.order {
-		if job := tracker.jobs[id]; job != nil && !job.done {
-			running++
-		}
-	}
 	newest := tracker.jobs[tracker.order[len(tracker.order)-1]]
-	state := "done"
+	operation := strings.TrimSpace(newest.operation)
 	if !newest.done {
-		state = strings.TrimSpace(newest.progress.Status)
+		state := strings.TrimSpace(newest.progress.Status)
 		if state == "" {
-			state = "running"
+			state = "starting"
 		}
-	} else if newest.err != nil {
-		state = "failed"
+		message := strings.TrimSpace(newest.progress.Message)
+		if message != "" {
+			state += " — " + message
+		}
+		return ui.Truncate(operation+": "+ui.SanitizeLine(state)+" · J details", 90)
 	}
-	return fmt.Sprintf("J jobs: %d running / %d total · %s %s", running, len(tracker.order), newest.operation, state)
+	return ""
+}
+
+func (tracker *jobTracker) FailurePrompt(width int) string {
+	if tracker == nil || tracker.failureID == "" {
+		return ""
+	}
+	job := tracker.jobs[tracker.failureID]
+	if job == nil || job.err == nil {
+		return ""
+	}
+	modalWidth := max(min(width-12, 92), 48)
+	lines := []string{
+		"Operation: " + ui.SanitizeLine(job.operation),
+		"",
+		"Error:",
+	}
+	lines = append(lines, wrapJobText(job.err.Error(), modalWidth-6)...)
+	lines = append(lines, "", "enter/esc dismiss   J open job details")
+	return lipgloss.NewStyle().Width(modalWidth).Padding(0, 1).
+		Border(lipgloss.RoundedBorder()).BorderForeground(ui.Warning).
+		Render(lipgloss.NewStyle().Bold(true).Foreground(ui.Warning).Render("JOB FAILED") + "\n" + strings.Join(lines, "\n"))
+}
+
+func indexOfJob(ids []string, target string) int {
+	for index, id := range ids {
+		if id == target {
+			return index
+		}
+	}
+	return 0
 }
 
 func (tracker *jobTracker) View(width int) string {
@@ -205,15 +250,22 @@ func (tracker *jobTracker) View(width int) string {
 			if job.done {
 				state = "completed"
 				if job.err != nil {
-					state = "failed: " + job.err.Error()
+					state = "failed"
 				}
 			} else if job.progress.Status != "" {
 				state = job.progress.Status
 			}
 			line := fmt.Sprintf("%s %-18s %-14s %s", marker, job.operation, shortJobID(job.id), state)
 			lines = append(lines, ui.Truncate(ui.SanitizeLine(line), modalWidth-4))
-			if index == tracker.selected && job.progress.Message != "" {
-				lines = append(lines, "  "+ui.Truncate(ui.SanitizeLine(job.progress.Message), modalWidth-6))
+		}
+		if job := tracker.selectedJob(); job != nil {
+			lines = append(lines, "", "SELECTED JOB", "Operation: "+ui.SanitizeLine(job.operation), "Status: "+jobState(job))
+			if job.progress.Message != "" {
+				lines = append(lines, "Progress: "+ui.Truncate(ui.SanitizeLine(job.progress.Message), modalWidth-14))
+			}
+			if job.err != nil {
+				lines = append(lines, "Error:")
+				lines = append(lines, wrapJobText(job.err.Error(), modalWidth-6)...)
 			}
 		}
 	}
@@ -229,6 +281,47 @@ func (tracker *jobTracker) View(width int) string {
 		Border(lipgloss.RoundedBorder()).BorderForeground(ui.Border).
 		Render(lipgloss.NewStyle().Bold(true).Foreground(ui.Primary).Render("SESSION JOBS") + "\n" + strings.Join(lines, "\n"))
 	return panel
+}
+
+func jobState(job *trackedJob) string {
+	if job == nil {
+		return "unknown"
+	}
+	if job.done {
+		if job.err != nil {
+			return "failed"
+		}
+		return "completed"
+	}
+	if status := strings.TrimSpace(job.progress.Status); status != "" {
+		return status
+	}
+	return "running"
+}
+
+// wrapJobText deliberately keeps errors readable in the jobs overlay without
+// adding a separate error screen.
+func wrapJobText(text string, width int) []string {
+	text = ui.SanitizeLine(text)
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return []string{"  —"}
+	}
+	width = max(width, 12)
+	lines, line := make([]string, 0, 3), "  "
+	for _, word := range words {
+		candidate := strings.TrimSpace(line + " " + word)
+		if len(line) > 2 && lipgloss.Width(candidate) > width {
+			lines = append(lines, ui.Truncate(line, width))
+			line = "  " + word
+			continue
+		}
+		line = candidate
+	}
+	if line != "" {
+		lines = append(lines, ui.Truncate(line, width))
+	}
+	return lines
 }
 
 func shortJobID(id string) string {
