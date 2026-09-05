@@ -81,6 +81,18 @@ func TestRootRendersPersistentFrameAndContainersPage(t *testing.T) {
 	}
 }
 
+func TestRootHeaderShowsSSHEndpoint(t *testing.T) {
+	app := NewWithSSHAddress(context.Background(), &appBackend{}, "127.0.0.1:23234")
+	_ = app.Init()
+	_, _ = app.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	view := app.View().Content
+	for _, value := range []string{"🐳", "SSH: 127.0.0.1:23234"} {
+		if !strings.Contains(view, value) {
+			t.Fatalf("header missing %q:\n%s", value, view)
+		}
+	}
+}
+
 func TestRootKeepsExpandedComposeFooterAtTerminalBottom(t *testing.T) {
 	app := New(context.Background(), &appBackend{})
 	_ = app.Init()

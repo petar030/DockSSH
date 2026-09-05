@@ -8,20 +8,28 @@ import (
 	"github.com/petar030/ssh-native-docker-tui/internal/tui/ui"
 )
 
-func renderTopBar(width int, connection, activity string) string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(ui.Primary).Render("◆  DOCKER TUI")
+func renderTopBar(width int, connection, activity, sshAddress string) string {
+	title := lipgloss.NewStyle().Bold(true).Foreground(ui.Primary).Render("🐳  DOCKER TUI")
+	endpoint := ""
+	if sshAddress != "" {
+		endpoint = lipgloss.NewStyle().Foreground(ui.Muted).Render("SSH: " + ui.SanitizeLine(sshAddress))
+	}
 	status := connection
 	if activity != "" {
 		status = activity + "  " + status
 	}
 	status = lipgloss.NewStyle().Foreground(ui.Muted).Render(status)
-	gap := max(width-lipgloss.Width(title)-lipgloss.Width(status), 1)
-	return ui.Truncate(title+strings.Repeat(" ", gap)+status, width)
+	left := title
+	if endpoint != "" {
+		left += "  " + endpoint
+	}
+	gap := max(width-lipgloss.Width(left)-lipgloss.Width(status), 1)
+	return ui.Truncate(left+strings.Repeat(" ", gap)+status, width)
 }
 
-func renderHeader(width, active int, connection, activity string) string {
+func renderHeader(width, active int, connection, activity, sshAddress string) string {
 	contentWidth := max(width-4, 1)
-	body := padHeaderLine(renderTopBar(contentWidth, connection, activity), contentWidth) + "\n" +
+	body := padHeaderLine(renderTopBar(contentWidth, connection, activity, sshAddress), contentWidth) + "\n" +
 		padHeaderLine(renderTabs(contentWidth, active), contentWidth)
 	return lipgloss.NewStyle().Padding(0, 1).
 		Border(lipgloss.RoundedBorder()).BorderForeground(ui.Border).Render(body)

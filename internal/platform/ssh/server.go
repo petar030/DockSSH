@@ -56,7 +56,7 @@ func New(config Config) (*Server, error) {
 		wish.WithHostKeyPath(config.HostKeyPath),
 		wish.WithMiddleware(
 			bubbletea.Middleware(func(session ssh.Session) (tea.Model, []tea.ProgramOption) {
-				return tui.New(session.Context(), config.Backend), nil
+				return tui.NewWithSSHAddress(session.Context(), config.Backend, config.Address), nil
 			}),
 			activeterm.Middleware(),
 		),

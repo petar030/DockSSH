@@ -31,8 +31,9 @@ const frameRows = 9
 // App is one SSH session's root model. It owns the persistent frame; page
 // packages own everything rendered inside the content area.
 type App struct {
-	width  int
-	height int
+	width      int
+	height     int
+	sshAddress string
 
 	activeTab  int
 	showHelp   bool
@@ -58,8 +59,19 @@ type Application interface {
 }
 
 func New(sessionCtx context.Context, application Application) *App {
+	return newApp(sessionCtx, application, "")
+}
+
+// NewWithSSHAddress constructs a session model with the address exposed by
+// the SSH server, so the persistent header can identify the active endpoint.
+func NewWithSSHAddress(sessionCtx context.Context, application Application, sshAddress string) *App {
+	return newApp(sessionCtx, application, sshAddress)
+}
+
+func newApp(sessionCtx context.Context, application Application, sshAddress string) *App {
 	jobs := newJobTracker(sessionCtx)
 	return &App{
+		sshAddress: strings.TrimSpace(sshAddress),
 		dashboard:  dashboard.New(sessionCtx, application),
 		containers: containerstui.New(sessionCtx, application, application.Containers()),
 		compose:    composetui.New(sessionCtx, application, application.Compose(), jobs),
@@ -394,7 +406,7 @@ func (app *App) render() string {
 	contentHeight := app.height - frameRows
 	body = lipgloss.NewStyle().Width(app.width).Height(contentHeight).Render(body)
 	rendered := strings.Join([]string{
-		renderHeader(app.width, app.activeTab, connection, app.pageActivity()),
+		renderHeader(app.width, app.activeTab, connection, app.pageActivity(), app.sshAddress),
 		body,
 		renderFooter(app.width, status, pageHelp, app.jobHelp(globalHelp)),
 	}, "\n")
