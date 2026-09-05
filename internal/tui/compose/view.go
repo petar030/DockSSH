@@ -35,7 +35,7 @@ func (m Model) listView(width, height int) string {
 	inner := max(width-4, 1)
 	rows := make([]string, 0, 7)
 	if m.notice != "" {
-		rows = append(rows, ui.ErrorNotice(m.notice, inner), "")
+		rows = append(rows, composeNotice(m.notice, inner), "")
 	}
 	rows = append(rows, "Filter: "+cell(m.filter, max(inner-10, 8)), "",
 		lipgloss.NewStyle().Foreground(ui.Primary).Render("  "+cell("PROJECT", max(inner*45/100, 16))+cell("STATUS", 16)+"CONFIG"))
@@ -61,6 +61,13 @@ func (m Model) listView(width, height int) string {
 		rows = append(rows, "", "No Compose projects match the filter.")
 	}
 	return panel("▦  COMPOSE PROJECTS", strings.Join(rows, "\n"), width)
+}
+
+func composeNotice(value string, width int) string {
+	if value == "Configuration saved" {
+		return ui.SuccessNotice(value, width)
+	}
+	return ui.ErrorNotice(value, width)
 }
 
 func (m Model) detailView(width, height int) string {

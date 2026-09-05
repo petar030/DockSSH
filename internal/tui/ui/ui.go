@@ -59,6 +59,11 @@ func WarningNotice(value string, width int) string {
 	return notice("!", value, width, lipgloss.NewStyle().Foreground(Warning))
 }
 
+// SuccessNotice presents a completed user action without implying an error.
+func SuccessNotice(value string, width int) string {
+	return notice("✓", value, width, lipgloss.NewStyle().Foreground(Success))
+}
+
 func notice(symbol, value string, width int, style lipgloss.Style) string {
 	value = symbol + " " + strings.TrimSpace(SanitizeLine(value))
 	return style.Render(Truncate(value, width))
