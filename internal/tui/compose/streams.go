@@ -32,6 +32,7 @@ func (m Model) openLogs() (Model, tea.Cmd) {
 	m.streamGen++
 	m.logLines = nil
 	m.logFragments = make(map[logFragmentKey]string)
+	m.logFilter, m.logFilterEdit, m.logFiltering = "", "", false
 	streamCtx, cancel := context.WithCancel(m.pageCtx)
 	m.streamCancel = cancel
 	generation, streamGeneration, project, api := m.generation, m.streamGen, m.selected, m.api
@@ -136,8 +137,28 @@ func (m *Model) boundLogs() {
 	}
 }
 
-func (m Model) handleLogKey(key string) (Model, tea.Cmd) {
+func (m Model) handleLogKey(message tea.KeyPressMsg) (Model, tea.Cmd) {
+	key := message.String()
+	if m.logFiltering {
+		switch key {
+		case "esc":
+			m.logFiltering = false
+		case "enter":
+			m.logFilter = strings.TrimSpace(m.logFilterEdit)
+			m.logFiltering = false
+			m.logScroll, m.logFollowing = m.logMaxScroll(), true
+		case "backspace":
+			m.logFilterEdit = trim(m.logFilterEdit)
+		default:
+			if text := message.Key().Text; text != "" {
+				m.logFilterEdit += text
+			}
+		}
+		return m, nil
+	}
 	switch key {
+	case "f":
+		m.logFilterEdit, m.logFiltering = m.logFilter, true
 	case "up", "k":
 		m.scrollLogs(-1)
 	case "down", "j":
@@ -172,8 +193,8 @@ func (m Model) closeLogs() Model {
 func (m Model) currentLog(generation, streamGen uint64) bool {
 	return m.current(generation) && m.streamGen == streamGen && m.overlay == logsOverlay
 }
-func (m Model) logViewportRows() int { return max(min(m.height-8, 28), 5) }
-func (m Model) logMaxScroll() int    { return max(len(m.logLines)-m.logViewportRows(), 0) }
+func (m Model) logViewportRows() int { return max(min(m.height-9, 28), 5) }
+func (m Model) logMaxScroll() int    { return max(len(m.filteredLogLines())-m.logViewportRows(), 0) }
 func (m *Model) scrollLogs(delta int) {
 	m.logScroll = max(0, min(m.logMaxScroll(), m.logScroll+delta))
 	m.logFollowing = m.logScroll == m.logMaxScroll()

@@ -69,6 +69,7 @@ func (model Model) openLogs() (Model, tea.Cmd) {
 	model.logLines = nil
 	model.logFragments = make(map[backendcontainers.LogSource]string)
 	model.logErr = nil
+	model.logFilter, model.logFilterEdit, model.logFiltering = "", "", false
 	streamCtx, cancel := context.WithCancel(model.pageCtx)
 	model.streamCancel = cancel
 	generation, streamGeneration, id, api := model.generation, model.streamGen, model.selectedID, model.api
@@ -283,7 +284,7 @@ func (model Model) currentStream(generation, streamGen uint64, mode viewMode) bo
 
 func (model Model) logViewportRows() int {
 	overlayHeight := max(min(model.height-4, 30), 10)
-	return max(overlayHeight-4, 1)
+	return max(overlayHeight-5, 1)
 }
 
 func (model Model) logMaxScroll() int {

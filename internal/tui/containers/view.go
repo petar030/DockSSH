@@ -246,6 +246,18 @@ func (model Model) logDisplayLines() []string {
 	if model.logErr != nil {
 		lines = append(lines, "", "Stream ended: "+safe(model.logErr.Error()))
 	}
+	if filter := strings.ToLower(strings.TrimSpace(model.logFilter)); filter != "" {
+		filtered := make([]string, 0, len(lines))
+		for _, line := range lines {
+			if strings.Contains(strings.ToLower(line), filter) {
+				filtered = append(filtered, line)
+			}
+		}
+		lines = filtered
+		if len(lines) == 0 {
+			lines = []string{"No retained log lines match the filter."}
+		}
+	}
 	return lines
 }
 
@@ -261,8 +273,12 @@ func (model Model) logsOverlayView() string {
 		visible = append(visible, "")
 	}
 	position := fmt.Sprintf("%d–%d / %d", min(start+1, len(lines)), end, len(lines))
-	hint := "j/k scroll   PgUp/PgDn page   g top   G bottom/follow   esc close"
-	body := strings.Join(visible, "\n") + "\n" + cell(hint, max(width-4-lipgloss.Width(position)-2, 1)) + "  " + position
+	filter := model.logFilter
+	if model.logFiltering {
+		filter = model.logFilterEdit + "_"
+	}
+	hint := "j/k scroll   f filter   PgUp/PgDn page   g/G top/bottom   esc close"
+	body := "Filter: " + safe(filter) + "\n" + strings.Join(visible, "\n") + "\n" + cell(hint, max(width-4-lipgloss.Width(position)-2, 1)) + "  " + position
 	return pagePanel("▤  LOGS — "+safe(model.selectedName()), body, width)
 }
 

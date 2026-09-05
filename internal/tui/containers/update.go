@@ -224,7 +224,26 @@ func (model Model) handleEvent(event backend.EventEnvelope) (Model, tea.Cmd) {
 func (model Model) handleKey(message tea.KeyPressMsg) (Model, tea.Cmd) {
 	key := message.String()
 	if model.overlay == logsOverlay {
+		if model.logFiltering {
+			switch key {
+			case "esc":
+				model.logFiltering = false
+			case "enter":
+				model.logFilter = strings.TrimSpace(model.logFilterEdit)
+				model.logFiltering = false
+				model.scroll, model.logFollowing = model.logMaxScroll(), true
+			case "backspace":
+				model.logFilterEdit = trimLastRune(model.logFilterEdit)
+			default:
+				if text := message.Key().Text; text != "" {
+					model.logFilterEdit += text
+				}
+			}
+			return model, nil
+		}
 		switch key {
+		case "f":
+			model.logFilterEdit, model.logFiltering = model.logFilter, true
 		case "up", "k":
 			model.scrollLogs(-1)
 		case "down", "j":

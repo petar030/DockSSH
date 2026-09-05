@@ -302,7 +302,7 @@ func (m Model) handleKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.handleConfigEditor(key)
 	}
 	if m.overlay == logsOverlay {
-		return m.handleLogKey(value)
+		return m.handleLogKey(key)
 	}
 	if m.overlay != noOverlay {
 		return m.handleOverlay(key)

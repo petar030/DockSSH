@@ -122,19 +122,22 @@ type Model struct {
 	pendingOperation string
 	notice           string
 
-	streamGen    uint64
-	streamCancel context.CancelFunc
-	logStream    backend.Stream[backendcontainers.LogEntry]
-	statsStream  backend.Stream[backendcontainers.StatsSample]
-	logLines     []string
-	logFragments map[backendcontainers.LogSource]string
-	logErr       error
-	logFollowing bool
-	stats        backendcontainers.StatsSample
-	pendingStats backendcontainers.StatsSample
-	hasStats     bool
-	statsDirty   bool
-	statsErr     error
+	streamGen     uint64
+	streamCancel  context.CancelFunc
+	logStream     backend.Stream[backendcontainers.LogEntry]
+	statsStream   backend.Stream[backendcontainers.StatsSample]
+	logLines      []string
+	logFragments  map[backendcontainers.LogSource]string
+	logErr        error
+	logFollowing  bool
+	logFilter     string
+	logFilterEdit string
+	logFiltering  bool
+	stats         backendcontainers.StatsSample
+	pendingStats  backendcontainers.StatsSample
+	hasStats      bool
+	statsDirty    bool
+	statsErr      error
 }
 
 func New(sessionCtx context.Context, common Backend, api API) Model {
@@ -207,7 +210,10 @@ func (model Model) Activity() string {
 
 func (model Model) Help() string {
 	if model.overlay == logsOverlay {
-		return "j/k Scroll │ PgUp/PgDn Page │ g Top │ G Bottom/follow │ esc Close logs"
+		if model.logFiltering {
+			return "type filter │ enter apply │ esc cancel"
+		}
+		return "j/k Scroll │ f Filter │ PgUp/PgDn Page │ g/G Top/bottom │ esc Close logs"
 	}
 	if model.overlay == confirmOverlay {
 		return "y Confirm │ n Cancel"

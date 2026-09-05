@@ -114,14 +114,17 @@ type Model struct {
 	editorPath       string
 	editorGeneration uint64
 
-	streamGen    uint64
-	streamCancel context.CancelFunc
-	logStream    backend.Stream[backendcompose.LogEntry]
-	logLines     []string
-	logFragments map[logFragmentKey]string
-	logErr       error
-	logFollowing bool
-	logScroll    int
+	streamGen     uint64
+	streamCancel  context.CancelFunc
+	logStream     backend.Stream[backendcompose.LogEntry]
+	logLines      []string
+	logFragments  map[logFragmentKey]string
+	logErr        error
+	logFollowing  bool
+	logScroll     int
+	logFilter     string
+	logFilterEdit string
+	logFiltering  bool
 }
 
 func New(ctx context.Context, common Backend, api API, jobs JobTracker) Model {
@@ -186,7 +189,10 @@ func (m Model) Activity() string {
 }
 func (m Model) Help() string {
 	if m.overlay == logsOverlay {
-		return "j/k scroll │ g/G top/bottom │ esc close logs"
+		if m.logFiltering {
+			return "type filter │ enter apply │ esc cancel"
+		}
+		return "j/k scroll │ f filter │ pgup/pgdown page │ g/G top/bottom │ esc close logs"
 	}
 	if m.overlay == configEditorOverlay {
 		return "ctrl+s save │ esc cancel │ arrows/pgup/pgdn move │ ctrl+v paste"

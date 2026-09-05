@@ -49,6 +49,14 @@ func TestLogChunksAreAssembledSanitizedAndBounded(t *testing.T) {
 	}
 }
 
+func TestLogFilterMatchesRetainedLinesCaseInsensitively(t *testing.T) {
+	model := Model{logLines: []string{"[stdout] INFO ready", "[stderr] DEBUG retry", "[stdout] debug cache"}, logFilter: "debug"}
+	lines := model.logDisplayLines()
+	if len(lines) != 2 || !strings.Contains(lines[0], "DEBUG") || !strings.Contains(lines[1], "debug") {
+		t.Fatalf("filtered lines = %#v", lines)
+	}
+}
+
 func TestStreamMessagesAndCloseRespectGeneration(t *testing.T) {
 	logs := newFakeStream[backendcontainers.LogEntry]()
 	api := &fakeAPI{logs: logs}

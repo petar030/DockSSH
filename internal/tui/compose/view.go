@@ -199,14 +199,41 @@ func (m Model) logsView() string {
 	if m.logErr != nil {
 		rows = append(rows, ui.ErrorNotice(m.logErr.Error(), width-4), "")
 	}
+	lines := m.filteredLogLines()
 	start := max(0, min(m.logScroll, m.logMaxScroll()))
-	end := min(start+m.logViewportRows(), len(m.logLines))
-	rows = append(rows, m.logLines[start:end]...)
-	if len(m.logLines) == 0 && m.logErr == nil {
+	end := min(start+m.logViewportRows(), len(lines))
+	rows = append(rows, "Filter: "+safe(m.logFilterView()))
+	rows = append(rows, lines[start:end]...)
+	if len(lines) == 0 && m.logErr == nil {
 		rows = append(rows, "Waiting for Compose logs…")
 	}
-	rows = append(rows, "", "j/k scroll   pgup/pgdown   g/G top/bottom   esc close")
+	rows = append(rows, "", "j/k scroll   f filter   pgup/pgdown page   g/G top/bottom   esc close")
 	return panel("COMPOSE LOGS — "+safe(m.selected), strings.Join(rows, "\n"), width)
+}
+
+func (m Model) filteredLogLines() []string {
+	lines := append([]string(nil), m.logLines...)
+	filter := strings.ToLower(strings.TrimSpace(m.logFilter))
+	if filter == "" {
+		return lines
+	}
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.Contains(strings.ToLower(line), filter) {
+			filtered = append(filtered, line)
+		}
+	}
+	if len(filtered) == 0 {
+		return []string{"No retained log lines match the filter."}
+	}
+	return filtered
+}
+
+func (m Model) logFilterView() string {
+	if m.logFiltering {
+		return m.logFilterEdit + "_"
+	}
+	return m.logFilter
 }
 
 func form(names, values []string, active int) string {

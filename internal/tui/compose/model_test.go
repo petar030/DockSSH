@@ -273,11 +273,11 @@ func TestLogsAreBoundedSanitizedAndScrollable(t *testing.T) {
 	m.logScroll = m.logMaxScroll()
 	m.logFollowing = false
 	previous := m.logScroll
-	m, _ = m.handleLogKey("k")
+	m, _ = m.handleLogKey(key("k"))
 	if m.logScroll >= previous {
 		t.Fatal("log scroll did not move upward")
 	}
-	m, _ = m.handleLogKey("esc")
+	m, _ = m.handleLogKey(key("esc"))
 	if m.overlay != noOverlay {
 		t.Fatal("logs did not close")
 	}
@@ -291,6 +291,14 @@ func TestLogsAssembleFragmentsByContainer(t *testing.T) {
 	joined := strings.Join(m.logLines, "\n")
 	if !strings.Contains(joined, "[worker-1] [stdout] other") || !strings.Contains(joined, "[web-1] [stdout] hello") {
 		t.Fatalf("fragment assembly mixed containers:\n%s", joined)
+	}
+}
+
+func TestComposeLogFilterMatchesRetainedLinesCaseInsensitively(t *testing.T) {
+	m := Model{logLines: []string{"[web] [stdout] INFO ready", "[web] [stderr] DEBUG retry"}, logFilter: "debug"}
+	lines := m.filteredLogLines()
+	if len(lines) != 1 || !strings.Contains(lines[0], "DEBUG") {
+		t.Fatalf("filtered lines = %#v", lines)
 	}
 }
 
