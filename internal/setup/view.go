@@ -85,7 +85,7 @@ func (m Model) viewServer() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(styleMuted.Render("↑/↓ or Tab — move   Enter — next   Esc — quit without saving"))
+	b.WriteString(commandBar(m, "↑/↓/Tab Move │ Enter Next │ Esc Quit without saving"))
 	return b.String()
 }
 
@@ -158,6 +158,10 @@ func commandLine(m Model, key, description string) string {
 	return "  " + ui.CommandBar(key+" "+description, max(m.width, 80))
 }
 
+func commandBar(m Model, value string) string {
+	return ui.CommandBar(value, max(m.width, 80))
+}
+
 // --- Docker screen ---
 
 func (m Model) viewDocker() string {
@@ -166,7 +170,7 @@ func (m Model) viewDocker() string {
 	b.WriteString(styleMuted.Render("Select the Docker daemon endpoint. Leave empty to use Docker's environment defaults.") + "\n\n")
 	b.WriteString(renderField(m.dockerFields[fieldDockerEndpoint], true))
 	b.WriteString("\n\n")
-	b.WriteString(styleMuted.Render("Enter — next   Esc — back"))
+	b.WriteString(commandBar(m, "Enter Next │ Esc Back"))
 	return b.String()
 }
 
@@ -198,7 +202,7 @@ func (m Model) viewCompose() string {
 		b.WriteString(styleDanger.Render("✕ "+m.composeError) + "\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(styleMuted.Render("Enter (empty) or → — next   Tab — select   ↑/↓ — reorder   ctrl+d — remove   Esc — back"))
+	b.WriteString(commandBar(m, "Enter Next │ → Next │ Tab Select │ ↑/↓ Reorder │ ctrl+d Remove │ Esc Back"))
 	return b.String()
 }
 
@@ -214,12 +218,12 @@ func (m Model) viewReview() string {
 
 	if m.saveSuccess {
 		b.WriteString(styleSuccess.Render("✓ Configuration saved to "+m.configPath) + "\n\n")
-		b.WriteString(styleMuted.Render("q — quit   Esc — back"))
+		b.WriteString(commandBar(m, "q Quit │ Esc Back"))
 	} else {
 		if m.saveError != "" {
 			b.WriteString(styleDanger.Render("✕ "+m.saveError) + "\n\n")
 		}
-		b.WriteString(styleMuted.Render("s — save   Esc — back   q — quit without saving"))
+		b.WriteString(commandBar(m, "s Save │ Esc Back │ q Quit without saving"))
 	}
 	return b.String()
 }
