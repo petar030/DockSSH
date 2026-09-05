@@ -7,6 +7,7 @@ import (
 	"context"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
 	backendsystem "github.com/petar030/ssh-native-docker-tui/internal/backend/system"
+	"github.com/petar030/ssh-native-docker-tui/internal/tui/ui"
 	"time"
 )
 
@@ -64,7 +65,7 @@ func New(ctx context.Context, b Backend, a API) Model {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return Model{backend: b, api: a, session: ctx, spinner: spinner.New(spinner.WithSpinner(spinner.Dot))}
+	return Model{backend: b, api: a, session: ctx, spinner: ui.NewSpinner()}
 }
 func (m Model) Activate() (Model, tea.Cmd) {
 	m = m.Deactivate()

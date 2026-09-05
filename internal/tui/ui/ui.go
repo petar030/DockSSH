@@ -7,9 +7,18 @@ import (
 	"strings"
 	"unicode"
 
+	"charm.land/bubbles/v2/spinner"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
+
+// NewSpinner returns the shared, primary-colour activity indicator.
+func NewSpinner() spinner.Model {
+	return spinner.New(
+		spinner.WithSpinner(spinner.Dot),
+		spinner.WithStyle(lipgloss.NewStyle().Foreground(Primary)),
+	)
+}
 
 const (
 	MinimumWidth  = 80

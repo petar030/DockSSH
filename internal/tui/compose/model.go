@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
 	backendcompose "github.com/petar030/ssh-native-docker-tui/internal/backend/compose"
+	"github.com/petar030/ssh-native-docker-tui/internal/tui/ui"
 )
 
 const (
@@ -133,7 +134,7 @@ func New(ctx context.Context, common Backend, api API, jobs JobTracker) Model {
 	editor.CharLimit = maxEditorBytes
 	editor.MaxHeight = 40
 	editor.MaxContentHeight = 10000
-	return Model{backend: common, api: api, jobs: jobs, session: ctx, spinner: spinner.New(spinner.WithSpinner(spinner.Dot)), editor: editor}
+	return Model{backend: common, api: api, jobs: jobs, session: ctx, spinner: ui.NewSpinner(), editor: editor}
 }
 
 func (m Model) Activate() (Model, tea.Cmd) {

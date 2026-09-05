@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
 	backendvolumes "github.com/petar030/ssh-native-docker-tui/internal/backend/volumes"
+	"github.com/petar030/ssh-native-docker-tui/internal/tui/ui"
 )
 
 type Backend interface {
@@ -74,7 +75,7 @@ func New(ctx context.Context, common Backend, api API) Model {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return Model{backend: common, api: api, session: ctx, spinner: spinner.New(spinner.WithSpinner(spinner.Dot))}
+	return Model{backend: common, api: api, session: ctx, spinner: ui.NewSpinner()}
 }
 func (m Model) Activate() (Model, tea.Cmd) {
 	m = m.Deactivate()

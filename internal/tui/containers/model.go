@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
 	backendcontainers "github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
+	"github.com/petar030/ssh-native-docker-tui/internal/tui/ui"
 )
 
 const (
@@ -140,7 +141,7 @@ func New(sessionCtx context.Context, common Backend, api API) Model {
 	if sessionCtx == nil {
 		sessionCtx = context.Background()
 	}
-	return Model{backend: common, api: api, sessionCtx: sessionCtx, spinner: spinner.New(spinner.WithSpinner(spinner.Dot))}
+	return Model{backend: common, api: api, sessionCtx: sessionCtx, spinner: ui.NewSpinner()}
 }
 
 func (model Model) Activate() (Model, tea.Cmd) {

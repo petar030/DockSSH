@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
 	backenddashboard "github.com/petar030/ssh-native-docker-tui/internal/backend/dashboard"
+	"github.com/petar030/ssh-native-docker-tui/internal/tui/ui"
 )
 
 // Backend is the narrow part of the shared backend used by Dashboard.
@@ -48,7 +49,7 @@ func New(sessionCtx context.Context, application Backend) Model {
 	}
 	return Model{
 		backend: application, sessionCtx: sessionCtx,
-		spinner: spinner.New(spinner.WithSpinner(spinner.Dot)),
+		spinner: ui.NewSpinner(),
 	}
 }
 
