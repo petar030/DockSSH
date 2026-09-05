@@ -62,7 +62,7 @@ func renderFooter(width int, status, pageHelp, globalHelp string) string {
 	} else {
 		pageHelp = ui.CommandBar(pageHelp, inner)
 	}
-	globalHelp = ui.CommandBar(globalHelp, inner)
+	globalHelp = ui.GlobalCommandBar(globalHelp, inner)
 	body := pageHelp + "\n" + globalHelp
 	return lipgloss.NewStyle().Width(max(width-2, 1)).Padding(0, 1).
 		Border(lipgloss.RoundedBorder()).BorderForeground(ui.Border).Render(body)

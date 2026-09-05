@@ -4,6 +4,7 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 	"unicode"
 
@@ -61,6 +62,17 @@ func Truncate(value string, width int) string {
 // between items. Page models supply plain text separated by │ so the same
 // presentation is used throughout the application frame.
 func CommandBar(value string, width int) string {
+	return commandBar(value, width, Primary)
+}
+
+// GlobalCommandBar renders shortcuts that apply to the whole TUI. Its softer
+// key colour keeps these controls visually distinct from the active page's
+// commands while retaining the same key-first layout.
+func GlobalCommandBar(value string, width int) string {
+	return commandBar(value, width, lipgloss.Color("#78B5E5"))
+}
+
+func commandBar(value string, width int, keyColor color.Color) string {
 	lines := strings.Split(value, "\n")
 	for index, line := range lines {
 		items := strings.Split(line, "│")
@@ -70,14 +82,14 @@ func CommandBar(value string, width int) string {
 			if item == "" {
 				continue
 			}
-			rendered = append(rendered, commandItem(item))
+			rendered = append(rendered, commandItem(item, keyColor))
 		}
 		lines[index] = Truncate(strings.Join(rendered, lipgloss.NewStyle().Foreground(Muted).Render(" · ")), width)
 	}
 	return strings.Join(lines, "\n")
 }
 
-func commandItem(item string) string {
+func commandItem(item string, keyColor color.Color) string {
 	fields := strings.Fields(item)
 	if len(fields) == 0 {
 		return ""
@@ -87,7 +99,7 @@ func commandItem(item string) string {
 		key = "[ / ]"
 		description = strings.TrimSpace(strings.TrimPrefix(item, "[ / ]"))
 	}
-	renderedKey := lipgloss.NewStyle().Bold(true).Foreground(Primary).Render(key)
+	renderedKey := lipgloss.NewStyle().Bold(true).Foreground(keyColor).Render(key)
 	if description == "" {
 		return renderedKey
 	}
