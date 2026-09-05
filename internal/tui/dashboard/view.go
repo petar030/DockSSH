@@ -8,6 +8,12 @@ import (
 	"github.com/petar030/ssh-native-docker-tui/internal/tui/ui"
 )
 
+const (
+	summaryPanelBodyRows = 7
+	diskLabelWidth       = 11
+	diskValueWidth       = 10
+)
+
 func (model Model) View() string {
 	if !model.hasData {
 		message := "Loading Dashboard data…"
@@ -54,7 +60,7 @@ func (model Model) enginePanel(width int) string {
 		ui.Truncate(safeDash(engine.OperatingSystem)+" / "+safeDash(engine.Architecture), max(width-4, 1)),
 		fmt.Sprintf("%d CPUs  %s memory", engine.CPUs, ui.FormatBytes(engine.MemoryBytes)),
 	}
-	return panel("ENGINE", strings.Join(body, "\n"), width)
+	return summaryPanel("ENGINE", strings.Join(body, "\n"), width)
 }
 
 func (model Model) resourcesPanel(width int) string {
@@ -64,7 +70,7 @@ func (model Model) resourcesPanel(width int) string {
 		resources.Containers, resources.ContainersRunning, resources.ContainersPaused,
 		resources.ContainersStopped, resources.Images, resources.Volumes, resources.Networks,
 	)
-	return panel("RESOURCES", body, width)
+	return summaryPanel("RESOURCES", body, width)
 }
 
 func (model Model) diskPanel(width int) string {
@@ -77,7 +83,7 @@ func (model Model) diskPanel(width int) string {
 			diskLineCompact("Volumes", disk.Volumes.TotalBytes, total, width),
 			diskLineCompact("Build cache", disk.BuildCache.TotalBytes, total, width),
 		}, "\n")
-		return panel("DISK USAGE", body, width)
+		return summaryPanel("DISK USAGE", body, width)
 	}
 	body := strings.Join([]string{
 		"Relative Docker disk usage",
@@ -87,7 +93,7 @@ func (model Model) diskPanel(width int) string {
 		diskLine("Build cache", disk.BuildCache.TotalBytes, total, width),
 		diskLine("Total", total, total, width),
 	}, "\n")
-	return panel("DISK USAGE", body, width)
+	return summaryPanel("DISK USAGE", body, width)
 }
 
 func (model Model) recentPanel(width int) string {
@@ -106,23 +112,33 @@ func (model Model) recentPanel(width int) string {
 	return panel("RECENT DOCKER EVENTS", strings.Join(rows, "\n"), width)
 }
 
+func summaryPanel(title, body string, width int) string {
+	rows := strings.Count(body, "\n") + 1
+	if rows < summaryPanelBodyRows {
+		body += strings.Repeat("\n", summaryPanelBodyRows-rows)
+	}
+	return panel(title, body, width)
+}
+
 func panel(title, body string, width int) string {
-	return lipgloss.NewStyle().
+	style := lipgloss.NewStyle().
 		Width(max(width, 1)).
 		Padding(0, 1).
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ui.Border).
-		Render(lipgloss.NewStyle().Bold(true).Foreground(ui.Primary).Render(title) + "\n" + body)
+		BorderForeground(ui.Border)
+	return style.Render(lipgloss.NewStyle().Bold(true).Foreground(ui.Primary).Render(title) + "\n" + body)
 }
 
 func diskLine(name string, used, total int64, width int) string {
-	barWidth := max(width-lipgloss.Width(name)-19, 5)
-	return fmt.Sprintf("%-11s %s %s %3d%%", name, ui.UsageBar(used, total, barWidth), ui.FormatBytes(used), ui.Percent(used, total))
+	contentWidth := max(width-4, 1)
+	barWidth := max(contentWidth-diskLabelWidth-diskValueWidth-7, 5)
+	return fmt.Sprintf("%-*s %s %-*s %3d%%", diskLabelWidth, name, ui.UsageBar(used, total, barWidth), diskValueWidth, ui.Truncate(ui.FormatBytes(used), diskValueWidth), ui.Percent(used, total))
 }
 
 func diskLineCompact(name string, used, total int64, width int) string {
-	barWidth := max(width-lipgloss.Width(name)-10, 4)
-	return fmt.Sprintf("%s %s %3d%%", name, ui.UsageBar(used, total, barWidth), ui.Percent(used, total))
+	contentWidth := max(width-4, 1)
+	barWidth := max(contentWidth-diskLabelWidth-6, 4)
+	return fmt.Sprintf("%-*s %s %3d%%", diskLabelWidth, name, ui.UsageBar(used, total, barWidth), ui.Percent(used, total))
 }
 
 func safeDash(value string) string {

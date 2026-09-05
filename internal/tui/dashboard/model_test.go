@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
 	backenddashboard "github.com/petar030/ssh-native-docker-tui/internal/backend/dashboard"
 )
@@ -133,6 +134,37 @@ func TestManualRefreshStartsHeaderSpinner(t *testing.T) {
 	batch, ok := command().(tea.BatchMsg)
 	if !ok || len(batch) != 2 {
 		t.Fatalf("manual refresh command = %#v, want request and spinner tick", command)
+	}
+}
+
+func TestDashboardSummaryPanelsAndDiskBarsAlign(t *testing.T) {
+	model := New(context.Background(), &fakeBackend{})
+	model.summary.DiskUsage = backenddashboard.DiskUsage{
+		Containers: backenddashboard.ResourceDiskUsage{TotalBytes: 1},
+		Images:     backenddashboard.ResourceDiskUsage{TotalBytes: 2},
+		Volumes:    backenddashboard.ResourceDiskUsage{TotalBytes: 3},
+		BuildCache: backenddashboard.ResourceDiskUsage{TotalBytes: 4},
+	}
+	const width = 48
+	heights := make(map[string]int)
+	for name, panel := range map[string]string{
+		"engine":    model.enginePanel(width),
+		"resources": model.resourcesPanel(width),
+		"disk":      model.diskPanel(width),
+	} {
+		heights[name] = lipgloss.Height(panel)
+	}
+	if heights["engine"] != heights["resources"] || heights["engine"] != heights["disk"] {
+		t.Fatalf("summary panel heights = %#v", heights)
+	}
+
+	containers := ansi.Strip(diskLine("Containers", 1, 10, 90))
+	buildCache := ansi.Strip(diskLine("Build cache", 4, 10, 90))
+	barLength := func(value string) int {
+		return strings.Count(value, "█") + strings.Count(value, "░")
+	}
+	if barLength(containers) != barLength(buildCache) {
+		t.Fatalf("disk bars differ in length: containers=%d build-cache=%d", barLength(containers), barLength(buildCache))
 	}
 }
 
