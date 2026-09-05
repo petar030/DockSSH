@@ -212,6 +212,29 @@ contract and edge cases are specified in [`plan.md`](plan.md#tui-implementation-
 - [ ] Manually verify commands/jobs/logs using Compose files inside a disposable
       allowed root; leave interactive Compose exec deferred
 
+## Slice 3.5: Compose configuration editor and creator (after TUI Slice 3)
+
+This is a separate follow-up slice. It must not be folded into Slice 3 because
+it adds backend behavior for creating, editing, validating, storing, and then
+running Compose configuration files.
+
+- [ ] Add a Compose configuration editor using Bubble Tea's text-area
+      component, with YAML text editing and a preconfigured starter template
+- [ ] Add client-side YAML/syntax validation before any backend request is sent;
+      keep the editor open and show a bounded, sanitized validation error
+- [ ] Add backend contracts and implementation for safely creating a new
+      Compose file and editing an existing file beneath configured Compose
+      roots, with path and write validation
+- [ ] Add an explicit save/create request separate from `Up`, so the backend
+      never receives partially edited or syntactically invalid content
+- [ ] Run the saved configuration through the existing Compose `ProjectSpec`
+      and job pipeline, preserving the existing path-safety and job rules
+- [ ] Test template creation, valid and invalid YAML, path traversal,
+      permission/write failures, replacement editing, concurrent sessions, and
+      running a newly created project
+- [ ] Manually verify creation and editing only with disposable Compose files
+      inside an allowed root; leave unrelated files unchanged
+
 ## TUI Slice 4: Images page
 
 - [x] Implement image list, session-local filters, identity selection, details
@@ -302,15 +325,13 @@ contract and edge cases are specified in [`plan.md`](plan.md#tui-implementation-
 - [ ] Replace the current backend demonstration in `main.go` with the documented
       Wish/SSH startup path
 
-## Future nice-to-have: fuller Compose invocation options
+## Future nice-to-have: Container and Compose
 
 - [ ] Support an explicit Compose project name (`-p` / `--project-name`) and use the resolved name for per-project job conflict protection
 - [ ] Support Compose profiles
 - [ ] Support custom environment variables and `.env` file selection
 - [ ] Support an explicit Compose project directory
 - [ ] Exec into a container terminal
-- [ ] Edit docker compose using nano editor
-
 ## Future nice-to-have: SSH access control
 
 - [ ] Add configurable SSH public-key authentication before permitting a
