@@ -41,16 +41,39 @@ func (api *API) readProjects(ctx context.Context) (backend.EventPayload, error) 
 	for _, stack := range stacks {
 		projects = append(projects, projectSummary(stack))
 	}
+	managed, err := api.managedProjects()
+	if err != nil {
+		return nil, err
+	}
+	active := make(map[string]struct{}, len(projects))
+	for _, project := range projects {
+		active[project.Name] = struct{}{}
+	}
+	for _, project := range managed {
+		if _, exists := active[project.Name]; !exists {
+			projects = append(projects, project)
+		}
+	}
 	sort.Slice(projects, func(i, j int) bool { return projects[i].Name < projects[j].Name })
 	return ProjectsUpdated{Projects: projects}, nil
 }
 
 func (api *API) readProject(ctx context.Context, name string) (backend.EventPayload, error) {
 	stack, err := api.findProject(ctx, name)
+	status := stack.Status
+	configFiles := splitConfigFiles(stack.ConfigFiles)
 	if err != nil {
-		return nil, err
+		if !backend.HasErrorCode(err, backend.ErrorNotFound) {
+			return nil, err
+		}
+		document, readErr := api.readConfig(ctx, name)
+		if readErr != nil {
+			return nil, err
+		}
+		status = "not started"
+		configFiles = []string{document.Path}
 	}
-	project, err := api.loadProject(ctx, ProjectSpec{Name: name, ConfigFiles: splitConfigFiles(stack.ConfigFiles)})
+	project, err := api.loadProject(ctx, ProjectSpec{Name: name, ConfigFiles: configFiles})
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +83,7 @@ func (api *API) readProject(ctx context.Context, name string) (backend.EventPayl
 	}
 
 	details := ProjectDetails{
-		Name: name, Status: stack.Status, WorkingDir: project.WorkingDir,
+		Name: name, Status: status, WorkingDir: project.WorkingDir,
 		ConfigFiles: append([]string(nil), project.ComposeFiles...),
 	}
 	serviceIndex := make(map[string]int, len(project.Services))

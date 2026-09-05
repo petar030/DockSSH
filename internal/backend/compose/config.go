@@ -168,6 +168,42 @@ func (api *API) readConfig(ctx context.Context, projectName string) (ConfigDocum
 	return ConfigDocument{ProjectName: projectName, Path: path, Content: string(content)}, nil
 }
 
+func (api *API) managedProjects() ([]ProjectSummary, error) {
+	if len(api.roots) == 0 {
+		return nil, nil
+	}
+	root, err := openManagedRoot(api.roots[0])
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	directory, err := root.Open(".")
+	if err != nil {
+		return nil, err
+	}
+	defer directory.Close()
+	entries, err := directory.ReadDir(-1)
+	if err != nil {
+		return nil, err
+	}
+	projects := make([]ProjectSummary, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !managedProjectName.MatchString(entry.Name()) {
+			continue
+		}
+		relative := filepath.Join(entry.Name(), "compose.yaml")
+		info, statErr := root.Lstat(relative)
+		if statErr != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
+		projects = append(projects, ProjectSummary{
+			Name: entry.Name(), Status: "not started",
+			ConfigFiles: []string{filepath.Join(api.roots[0], relative)},
+		})
+	}
+	return projects, nil
+}
+
 func configWriteError(projectName string, err error) error {
 	return &backend.AppError{Code: backend.ErrorPermissionDenied, Operation: "save Compose configuration", Resource: "compose.yaml", ID: projectName, Err: err}
 }

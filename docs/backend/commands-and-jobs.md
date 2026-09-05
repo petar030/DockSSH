@@ -20,7 +20,8 @@ Compose `SaveConfig` is also a short command. Its callback writes one validated
 managed file and never starts a Compose project. With several accepted saves
 for the same project, atomic replacement guarantees complete files and the
 last worker to rename wins; short commands intentionally have no per-project
-lock. Starting the saved definition remains a separate `Up` job.
+lock. A saved definition is enlisted as a `not started` Compose project;
+starting it remains the page's ordinary separate `Up` job.
 
 ## Long jobs
 

@@ -222,8 +222,9 @@ explicit disposable project with its exact project name and configuration.
 For the Compose editor follow-up, press `n`, enter a strict lowercase project
 name, and confirm the displayed target is exactly
 `<first compose root>/<project>/compose.yaml`. Invalid YAML must stay editable
-and create no file. Save the template with `ctrl+s`, verify mode `0600`, then
-explicitly accept the prefilled Up form and confirm the project becomes active.
+and create no file. Save the template with `ctrl+s`, verify mode `0600`, and
+confirm it appears immediately as a `not started` project. Then use the
+ordinary Up action and confirm the project becomes active.
 Press `E` to load and replace that same managed file. Two sessions may edit the
 same project: saves are atomic last-writer-wins, so the final file must equal
 one complete submitted document and contain no `.compose-*.tmp` files. Finally

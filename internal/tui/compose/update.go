@@ -216,10 +216,25 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		m.editor.Blur()
-		m.overlay, m.notice, m.formProject = upOverlay, "", message.project
-		m.field, m.fields, m.optionA, m.optionB = 0, [4]string{}, false, false
-		m.fields[0] = message.path
-		return m, nil
+		m.overlay, m.notice = noOverlay, "Configuration saved"
+		found := false
+		for index := range m.projects {
+			if m.projects[index].Name == message.project {
+				m.projects[index].ConfigFiles = []string{message.path}
+				found = true
+				break
+			}
+		}
+		if !found {
+			m.projects = append(m.projects, backendcompose.ProjectSummary{
+				Name: message.project, Status: "not started", ConfigFiles: []string{message.path},
+			})
+		}
+		m.selected = message.project
+		m.selectionGen++
+		m.targetLoading, m.targetErr = true, nil
+		m.ensureVisible()
+		return m, requestDetails(m.api, m.generation, m.selectionGen, m.selected)
 	default:
 		if m.overlay == configEditorOverlay && !m.pending {
 			var command tea.Cmd

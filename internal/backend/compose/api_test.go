@@ -26,19 +26,52 @@ func TestRequestDetailsSubmitsTargetedRefresh(t *testing.T) {
 }
 
 func TestReadRefreshListsProjects(t *testing.T) {
+	root := t.TempDir()
+	managedPath := filepath.Join(root, "saved", "compose.yaml")
+	if err := os.MkdirAll(filepath.Dir(managedPath), 0o700); err != nil {
+		t.Fatalf("create managed project: %v", err)
+	}
+	if err := os.WriteFile(managedPath, []byte("services: {}\n"), 0o600); err != nil {
+		t.Fatalf("write managed project: %v", err)
+	}
 	client := &fakeComposeClient{stacks: []composeapi.Stack{
 		{Name: "zeta", Status: composeapi.RUNNING, ConfigFiles: "/tmp/z/compose.yaml"},
 		{Name: "alpha", Status: composeapi.UNKNOWN, ConfigFiles: "/tmp/a/compose.yaml"},
 	}}
-	api := newTestAPI(t, client, &recordingRefreshRequester{}, t.TempDir())
+	api := newTestAPI(t, client, &recordingRefreshRequester{}, root)
 
 	payload, err := api.ReadRefresh(context.Background(), backend.RefreshKey{Kind: RefreshKindList})
 	if err != nil {
 		t.Fatalf("read projects: %v", err)
 	}
 	update := payload.(ProjectsUpdated)
-	if len(update.Projects) != 2 || update.Projects[0].Name != "alpha" || update.Projects[1].Name != "zeta" {
+	if len(update.Projects) != 3 || update.Projects[0].Name != "alpha" || update.Projects[1].Name != "saved" || update.Projects[1].Status != "not started" || update.Projects[2].Name != "zeta" {
 		t.Fatalf("projects = %#v", update.Projects)
+	}
+}
+
+func TestReadRefreshLoadsSavedProjectBeforeFirstUp(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "saved", "compose.yaml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatalf("create project directory: %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte("services:\n  web:\n    image: nginx\n"), 0o600); err != nil {
+		t.Fatalf("write Compose config: %v", err)
+	}
+	client := &fakeComposeClient{project: &composetypes.Project{
+		Name: "saved", WorkingDir: filepath.Dir(configPath), ComposeFiles: []string{configPath},
+		Services: composetypes.Services{"web": {Name: "web", Image: "nginx"}},
+	}}
+	api := newTestAPI(t, client, &recordingRefreshRequester{}, root)
+
+	payload, err := api.ReadRefresh(context.Background(), backend.RefreshKey{Kind: RefreshKindDetails, ID: "saved"})
+	if err != nil {
+		t.Fatalf("read saved project details: %v", err)
+	}
+	details := payload.(ProjectUpdated).Project
+	if details.Name != "saved" || details.Status != "not started" || len(details.Services) != 1 || details.ConfigFiles[0] != configPath {
+		t.Fatalf("details = %#v", details)
 	}
 }
 

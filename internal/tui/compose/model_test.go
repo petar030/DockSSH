@@ -326,19 +326,11 @@ func TestNewConfigEditorValidatesThenSavesWithoutStartingProject(t *testing.T) {
 	if api.saved.ProjectName != "new-project" || api.saved.Content != starterConfig {
 		t.Fatalf("save options = %+v", api.saved)
 	}
-	if m.overlay != upOverlay || m.formProject != "new-project" || m.fields[0] != api.configPath {
-		t.Fatalf("post-save Up form = overlay %v project %q fields=%v", m.overlay, m.formProject, m.fields)
+	if m.overlay != noOverlay || m.selected != "new-project" || m.selectedSummary().ConfigFiles[0] != api.configPath {
+		t.Fatalf("post-save project = overlay %v selected %q summary=%+v", m.overlay, m.selected, m.selectedSummary())
 	}
 	if api.job != nil {
 		t.Fatal("saving automatically started a Compose job")
-	}
-
-	api.job = &fakeJob{id: "compose.up-new"}
-	m.jobs = &fakeTracker{jobs: map[string]bool{}}
-	m, command = m.submitOverlay()
-	m, _ = m.Update(firstMessage(command))
-	if api.spec.Name != "new-project" || len(api.spec.ConfigFiles) != 1 || api.spec.ConfigFiles[0] != api.configPath {
-		t.Fatalf("saved ProjectSpec = %+v", api.spec)
 	}
 }
 

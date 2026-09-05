@@ -917,8 +917,9 @@ on `PageContainers`; their results remain typed page events, filtered by full
 executor. Logs and stats are session-owned streams.
 
 **Compose.** The TUI calls the methods listed above through
-`application.Compose()`. `Backend.RequestRefresh(PageCompose)` loads the active
-project list; `RequestDetails(name)` loads one active project's definition,
+`application.Compose()`. `Backend.RequestRefresh(PageCompose)` loads active
+projects and saved managed configurations; `RequestDetails(name)` loads one
+active or saved project's definition,
 services and containers. File-based scale/up/pull/build operations require an
 explicit `ProjectSpec`; every config file must resolve beneath a configured
 `ComposeRoots` directory. Short lifecycle operations use `CommandExecutor`,
@@ -950,14 +951,14 @@ command handled by `CommandExecutor`. The save worker repeats validation,
 opens the configured directory through Go's root-scoped filesystem API,
 rejects symlink/non-regular targets, writes a restrictive temporary file, syncs
 it, and atomically renames it over `compose.yaml`. Saving never starts Docker;
-on success the TUI opens a prefilled `Up` form and the user explicitly decides
-whether to start the existing job pipeline.
+on success the configuration becomes a normal selectable project with status
+`not started`. The user can later invoke the page's ordinary `Up` action.
 
 There is no second file registry, editor cache, save queue, or same-project
 lock. Concurrent saves use the existing command workers: each rename is atomic
-and the last complete save wins. Active project discovery remains based on
-Docker Compose labels, so a newly saved project appears in the shared project
-list only after its separate `Up` operation creates Docker resources.
+and the last complete save wins. The shared list merges managed configurations
+from the first Compose root with active projects discovered through Docker
+Compose labels; an active project takes precedence over its saved-only entry.
 
 **Images.** `Backend.RequestRefresh(PageImages)` publishes the complete local
 image list. `RequestDetails` and `RequestHistory` submit targeted refresh keys.

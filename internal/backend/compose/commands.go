@@ -93,9 +93,8 @@ func (api *API) saveConfigRequest(options SaveConfigOptions) (backend.CommandReq
 		OperationID: "compose.config.save",
 		Operation:   "save Compose configuration",
 		Affected:    []backend.AffectedResource{{Kind: "compose_project", ID: projectName}},
-		// Saving a file changes no Docker state. Refreshing the active-project
-		// list is harmless and lets an already-active project reconcile; a new
-		// project becomes discoverable only after the separate Up job.
+		// Saving changes no Docker state, but it does add or update a selectable
+		// managed project in the Compose page catalog.
 		RefreshKeys: []backend.RefreshKey{{Kind: RefreshKindList}},
 		Run: func(context.Context) error {
 			return api.writeConfig(projectName, options.Content)

@@ -325,7 +325,18 @@ func TestComposeSliceAgainstDocker(t *testing.T) {
 	if _, err := downJob.Wait(ctx); err != nil {
 		t.Fatalf("wait for Compose down: %v", err)
 	}
-	waitForComposeProject(t, ctx, listSubscription.Events(), projectName, false)
+	for {
+		update := waitForComposeProject(t, ctx, listSubscription.Events(), projectName, true)
+		stopped := false
+		for _, project := range update.Projects {
+			if project.Name == projectName && project.Status == "not started" {
+				stopped = true
+			}
+		}
+		if stopped {
+			break
+		}
+	}
 }
 
 func TestImagesSliceAgainstDocker(t *testing.T) {
