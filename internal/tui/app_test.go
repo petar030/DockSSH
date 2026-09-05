@@ -81,6 +81,21 @@ func TestRootRendersPersistentFrameAndContainersPage(t *testing.T) {
 	}
 }
 
+func TestRootKeepsExpandedComposeFooterAtTerminalBottom(t *testing.T) {
+	app := New(context.Background(), &appBackend{})
+	_ = app.Init()
+	_, _ = app.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	_, _ = app.Update(key("3"))
+
+	view := app.View().Content
+	if height := lipgloss.Height(view); height != 30 {
+		t.Fatalf("Compose frame height = %d, want 30:\n%s", height, view)
+	}
+	if !strings.Contains(view, "p/P Pause/Unpause") || !strings.Contains(view, "l Logs") {
+		t.Fatalf("Compose footer did not show both shortcut rows:\n%s", view)
+	}
+}
+
 func TestRootDirectAndAdjacentNavigationWraps(t *testing.T) {
 	app := New(context.Background(), &appBackend{})
 	_ = app.Init()
