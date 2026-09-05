@@ -259,15 +259,15 @@ contract and edge cases are specified in [`plan.md`](plan.md#tui-implementation-
 
 ## TUI Slice 7: Events page
 
-- [ ] Subscribe to `PageEvents` for the initial `RecentUpdated` window and raw
+- [x] Subscribe to `PageEvents` for the initial `RecentUpdated` window and raw
       live `DockerEventObserved` events in the same page lifecycle
-- [ ] Implement session-local resource, ID, action and Compose-project filters
+- [x] Implement session-local resource, ID, action and Compose-project filters
       using backend subscription filters where a resubscription is warranted
-- [ ] Implement session-local clear without altering shared backend history
-- [ ] Bound displayed event rows and safely render untrusted attributes
-- [ ] Test newest-first history, live ordering, clear, filtering, overflow
+- [x] Implement session-local clear without altering shared backend history
+- [x] Bound displayed event rows and safely render untrusted attributes
+- [x] Test newest-first history, live ordering, clear, filtering, overflow
       recovery and two-session independence
-- [ ] Manually verify Docker activity updates Events and affected resource pages
+- [x] Manually verify disposable Docker activity updates Events independently
       independently
 
 ## TUI Slice 8: System page

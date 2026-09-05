@@ -15,6 +15,7 @@ import (
 	backendvolumes "github.com/petar030/ssh-native-docker-tui/internal/backend/volumes"
 	containerstui "github.com/petar030/ssh-native-docker-tui/internal/tui/containers"
 	"github.com/petar030/ssh-native-docker-tui/internal/tui/dashboard"
+	eventstui "github.com/petar030/ssh-native-docker-tui/internal/tui/events"
 	imagestui "github.com/petar030/ssh-native-docker-tui/internal/tui/images"
 	networkstui "github.com/petar030/ssh-native-docker-tui/internal/tui/networks"
 	"github.com/petar030/ssh-native-docker-tui/internal/tui/ui"
@@ -36,6 +37,7 @@ type App struct {
 	images     imagestui.Model
 	volumes    volumestui.Model
 	networks   networkstui.Model
+	events     eventstui.Model
 	jobs       *jobTracker
 }
 
@@ -55,6 +57,7 @@ func New(sessionCtx context.Context, application Application) *App {
 		images:     imagestui.New(sessionCtx, application, application.Images(), jobs),
 		volumes:    volumestui.New(sessionCtx, application, application.Volumes()),
 		networks:   networkstui.New(sessionCtx, application, application.Networks()),
+		events:     eventstui.New(sessionCtx, application),
 		jobs:       jobs,
 	}
 }
@@ -101,6 +104,11 @@ func (app *App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			app.networks = updated
 			return app, command
 		}
+		if app.activeTab == 6 && app.events.CapturesInput() {
+			updated, command := app.events.Update(message)
+			app.events = updated
+			return app, command
+		}
 		key := message.String()
 		switch key {
 		case "q":
@@ -140,6 +148,11 @@ func (app *App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				app.networks, command = app.networks.Refresh()
 				return app, command
 			}
+			if app.activeTab == 6 {
+				var command tea.Cmd
+				app.events, command = app.events.Refresh()
+				return app, command
+			}
 		}
 		if index, ok := tabFromKey(key); ok {
 			return app.switchTab(index)
@@ -172,6 +185,11 @@ func (app *App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			app.networks = updated
 			return app, command
 		}
+		if app.activeTab == 6 {
+			updated, command := app.events.Update(message)
+			app.events = updated
+			return app, command
+		}
 		return app, nil
 	}
 
@@ -184,9 +202,10 @@ func (app *App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	updatedImages, imagesCommand := app.images.Update(message)
 	updatedVolumes, volumesCommand := app.volumes.Update(message)
 	updatedNetworks, networksCommand := app.networks.Update(message)
+	updatedEvents, eventsCommand := app.events.Update(message)
 	jobsCommand := app.jobs.Update(message)
-	app.dashboard, app.containers, app.images, app.volumes, app.networks = updatedDashboard, updatedContainers, updatedImages, updatedVolumes, updatedNetworks
-	return app, tea.Batch(dashboardCommand, containersCommand, imagesCommand, volumesCommand, networksCommand, jobsCommand)
+	app.dashboard, app.containers, app.images, app.volumes, app.networks, app.events = updatedDashboard, updatedContainers, updatedImages, updatedVolumes, updatedNetworks, updatedEvents
+	return app, tea.Batch(dashboardCommand, containersCommand, imagesCommand, volumesCommand, networksCommand, eventsCommand, jobsCommand)
 }
 
 func (app *App) View() tea.View {
@@ -211,6 +230,8 @@ func (app *App) switchTab(index int) (tea.Model, tea.Cmd) {
 		app.volumes = app.volumes.Deactivate()
 	} else if app.activeTab == 5 {
 		app.networks = app.networks.Deactivate()
+	} else if app.activeTab == 6 {
+		app.events = app.events.Deactivate()
 	}
 	app.activeTab = index
 	app.showHelp = false
@@ -244,6 +265,12 @@ func (app *App) switchTab(index int) (tea.Model, tea.Cmd) {
 		app.resizeActivePage()
 		return app, command
 	}
+	if app.activeTab == 6 {
+		var command tea.Cmd
+		app.events, command = app.events.Activate()
+		app.resizeActivePage()
+		return app, command
+	}
 	return app, nil
 }
 
@@ -258,6 +285,8 @@ func (app *App) resizeActivePage() {
 		app.volumes = app.volumes.SetSize(app.width, max(app.height-frameRows, 0))
 	} else if app.activeTab == 5 {
 		app.networks = app.networks.SetSize(app.width, max(app.height-frameRows, 0))
+	} else if app.activeTab == 6 {
+		app.events = app.events.SetSize(app.width, max(app.height-frameRows, 0))
 	}
 }
 
@@ -288,6 +317,8 @@ func (app *App) render() string {
 		pageHelp = app.volumes.Help()
 	} else if app.activeTab == 5 {
 		pageHelp = app.networks.Help()
+	} else if app.activeTab == 6 {
+		pageHelp = app.events.Help()
 	}
 	globalHelp := "[ / ] switch tab   1-8 open page   r refresh   ? help   q quit"
 	if app.showHelp {
@@ -323,6 +354,9 @@ func (app *App) pageActivity() string {
 	if app.activeTab == 5 {
 		return app.networks.Activity()
 	}
+	if app.activeTab == 6 {
+		return app.events.Activity()
+	}
 	return ""
 }
 
@@ -341,6 +375,9 @@ func (app *App) pageContent() string {
 	}
 	if app.activeTab == 5 {
 		return app.networks.View()
+	}
+	if app.activeTab == 6 {
+		return app.events.View()
 	}
 	item := tabs[app.activeTab]
 	return lipgloss.NewStyle().Padding(2, 3).Render(fmt.Sprintf(
@@ -364,6 +401,9 @@ func (app *App) pageStatus() string {
 	}
 	if app.activeTab == 5 {
 		return app.networks.Status()
+	}
+	if app.activeTab == 6 {
+		return app.events.Status()
 	}
 	return tabs[app.activeTab].label + " is not implemented yet"
 }
@@ -389,6 +429,7 @@ func (app *App) deactivateAll() {
 	app.images = app.images.Deactivate()
 	app.volumes = app.volumes.Deactivate()
 	app.networks = app.networks.Deactivate()
+	app.events = app.events.Deactivate()
 }
 
 func (app *App) jobHelp(global string) string {

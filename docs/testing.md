@@ -229,6 +229,12 @@ use uniquely labeled disposable networks and endpoints. Never remove Docker's
 `bridge`, `host`, or `none` networks. Active-endpoint removal should explain
 that the endpoint must be disconnected, including on Docker 29.
 
+For Events QA, use tab `7`, then start/stop or create/remove one explicitly
+labeled disposable resource. Confirm the newest event appears, filter changes
+replace the subscription and reconcile recent history, and `c` clears only the
+current SSH session while live delivery continues. A second session may keep a
+different filter and displayed history without interference.
+
 ## Docker configuration
 
 The integration fixture follows normal Docker client configuration by default.
