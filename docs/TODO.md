@@ -193,23 +193,23 @@ contract and edge cases are specified in [`plan.md`](plan.md#tui-implementation-
 
 - [x] Add the root/session job tracker before the first job-owning page; keep
       accepted jobs alive and observable across tab changes
-- [ ] Implement active-project list, session-local filtering and identity-based
+- [x] Implement active-project list, session-local filtering and identity-based
       selection
-- [ ] Implement keyed project details/services/containers and tolerate unknown
+- [x] Implement keyed project details/services/containers and tolerate unknown
       Compose/Docker status and health strings
-- [ ] Implement project-spec input with clear validation for project name,
+- [x] Implement project-spec input with clear validation for project name,
       services, profiles and Compose files beneath configured roots
-- [ ] Implement start, stop, restart, pause, unpause and scale as short commands
-- [ ] Implement up, down, pull and build as jobs with best-effort progress,
+- [x] Implement start, stop, restart, pause, unpause and scale as short commands
+- [x] Implement up, down, pull and build as jobs with best-effort progress,
       reliable `Wait`, conflict/capacity errors and explicit cancellation
-- [ ] Merge or suppress duplicate progress received from a local `Job` handle
+- [x] Merge or suppress duplicate progress received from a local `Job` handle
       and the page Event Hub by job ID
-- [ ] Implement Compose logs as a bounded, sanitized, page-owned stream
-- [ ] Confirm destructive down/volume-removal actions and document that job
+- [x] Implement Compose logs as a bounded, sanitized, page-owned stream
+- [x] Confirm destructive down/volume-removal actions and document that job
       reattachment/history after SSH disconnect is unavailable in v1
-- [ ] Test tab switching during jobs, progress loss, completion refreshes,
+- [x] Test tab switching during jobs, progress loss, completion refreshes,
       per-project conflict, job capacity and disconnect survival
-- [ ] Manually verify commands/jobs/logs using Compose files inside a disposable
+- [x] Manually verify commands/jobs/logs using Compose files inside a disposable
       allowed root; leave interactive Compose exec deferred
 
 ## Slice 3.5: Compose configuration editor and creator (after TUI Slice 3)

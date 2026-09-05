@@ -200,6 +200,25 @@ short interval such as `-dashboard-refresh=2s` when checking the scheduler.
 `-listen` must remain loopback until client authentication is implemented. A
 persistent host key is generated at `.ssh-docker-tui/host_ed25519` by default.
 
+For Compose QA, create a disposable directory and project, then explicitly
+allow only that directory when starting the application:
+
+```sh
+go run ./cmd/ssh-docker-tui \
+  -compose-root=/tmp/ssh-docker-tui-compose-check \
+  -dashboard-refresh=0
+```
+
+Use tab `3` to verify active-project filtering and selection, keyed service and
+container details, details scrolling, short lifecycle/scale commands, and the
+centered logs stream. Exercise up/pull/build/down only with configuration files
+inside that disposable root. Switch tabs while a job is running and confirm it
+continues in `J`; down with volume removal always requires its visible
+confirmation. Use a second SSH session to verify filters and selection remain
+independent while both sessions receive authoritative Compose updates. Test an
+out-of-root file path and confirm it is rejected. Afterwards, remove only the
+explicit disposable project with its exact project name and configuration.
+
 For Containers QA, create only an explicitly named and labeled disposable
 container. In the Containers tab verify local filtering/sorting, ID-based
 selection, details, stopped/running processes, logs, stats, action confirmations

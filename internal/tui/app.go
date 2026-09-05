@@ -9,11 +9,13 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	backendcompose "github.com/petar030/ssh-native-docker-tui/internal/backend/compose"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 	backendimages "github.com/petar030/ssh-native-docker-tui/internal/backend/images"
 	backendnetworks "github.com/petar030/ssh-native-docker-tui/internal/backend/networks"
 	backendsystem "github.com/petar030/ssh-native-docker-tui/internal/backend/system"
 	backendvolumes "github.com/petar030/ssh-native-docker-tui/internal/backend/volumes"
+	composetui "github.com/petar030/ssh-native-docker-tui/internal/tui/compose"
 	containerstui "github.com/petar030/ssh-native-docker-tui/internal/tui/containers"
 	"github.com/petar030/ssh-native-docker-tui/internal/tui/dashboard"
 	eventstui "github.com/petar030/ssh-native-docker-tui/internal/tui/events"
@@ -36,6 +38,7 @@ type App struct {
 	showHelp   bool
 	dashboard  dashboard.Model
 	containers containerstui.Model
+	compose    composetui.Model
 	images     imagestui.Model
 	volumes    volumestui.Model
 	networks   networkstui.Model
@@ -47,6 +50,7 @@ type App struct {
 type Application interface {
 	dashboard.Backend
 	Containers() *containers.API
+	Compose() *backendcompose.API
 	Images() *backendimages.API
 	Volumes() *backendvolumes.API
 	Networks() *backendnetworks.API
@@ -58,6 +62,7 @@ func New(sessionCtx context.Context, application Application) *App {
 	return &App{
 		dashboard:  dashboard.New(sessionCtx, application),
 		containers: containerstui.New(sessionCtx, application, application.Containers()),
+		compose:    composetui.New(sessionCtx, application, application.Compose(), jobs),
 		images:     imagestui.New(sessionCtx, application, application.Images(), jobs),
 		volumes:    volumestui.New(sessionCtx, application, application.Volumes()),
 		networks:   networkstui.New(sessionCtx, application, application.Networks()),
@@ -92,6 +97,11 @@ func (app *App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if app.activeTab == 1 && app.containers.CapturesInput() {
 			updated, command := app.containers.Update(message)
 			app.containers = updated
+			return app, command
+		}
+		if app.activeTab == 2 && app.compose.CapturesInput() {
+			updated, command := app.compose.Update(message)
+			app.compose = updated
 			return app, command
 		}
 		if app.activeTab == 3 && app.images.CapturesInput() {
@@ -143,6 +153,11 @@ func (app *App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				app.containers, command = app.containers.Refresh()
 				return app, command
 			}
+			if app.activeTab == 2 {
+				var command tea.Cmd
+				app.compose, command = app.compose.Refresh()
+				return app, command
+			}
 			if app.activeTab == 3 {
 				var command tea.Cmd
 				app.images, command = app.images.Refresh()
@@ -185,6 +200,11 @@ func (app *App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			app.containers = updated
 			return app, command
 		}
+		if app.activeTab == 2 {
+			updated, command := app.compose.Update(message)
+			app.compose = updated
+			return app, command
+		}
 		if app.activeTab == 3 {
 			updated, command := app.images.Update(message)
 			app.images = updated
@@ -219,14 +239,15 @@ func (app *App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	// the user had already changed tabs.
 	updatedDashboard, dashboardCommand := app.dashboard.Update(message)
 	updatedContainers, containersCommand := app.containers.Update(message)
+	updatedCompose, composeCommand := app.compose.Update(message)
 	updatedImages, imagesCommand := app.images.Update(message)
 	updatedVolumes, volumesCommand := app.volumes.Update(message)
 	updatedNetworks, networksCommand := app.networks.Update(message)
 	updatedEvents, eventsCommand := app.events.Update(message)
 	updatedSystem, systemCommand := app.system.Update(message)
 	jobsCommand := app.jobs.Update(message)
-	app.dashboard, app.containers, app.images, app.volumes, app.networks, app.events, app.system = updatedDashboard, updatedContainers, updatedImages, updatedVolumes, updatedNetworks, updatedEvents, updatedSystem
-	return app, tea.Batch(dashboardCommand, containersCommand, imagesCommand, volumesCommand, networksCommand, eventsCommand, systemCommand, jobsCommand)
+	app.dashboard, app.containers, app.compose, app.images, app.volumes, app.networks, app.events, app.system = updatedDashboard, updatedContainers, updatedCompose, updatedImages, updatedVolumes, updatedNetworks, updatedEvents, updatedSystem
+	return app, tea.Batch(dashboardCommand, containersCommand, composeCommand, imagesCommand, volumesCommand, networksCommand, eventsCommand, systemCommand, jobsCommand)
 }
 
 func (app *App) View() tea.View {
@@ -245,6 +266,8 @@ func (app *App) switchTab(index int) (tea.Model, tea.Cmd) {
 		app.dashboard = app.dashboard.Deactivate()
 	} else if app.activeTab == 1 {
 		app.containers = app.containers.Deactivate()
+	} else if app.activeTab == 2 {
+		app.compose = app.compose.Deactivate()
 	} else if app.activeTab == 3 {
 		app.images = app.images.Deactivate()
 	} else if app.activeTab == 4 {
@@ -267,6 +290,12 @@ func (app *App) switchTab(index int) (tea.Model, tea.Cmd) {
 	if app.activeTab == 1 {
 		var command tea.Cmd
 		app.containers, command = app.containers.Activate()
+		app.resizeActivePage()
+		return app, command
+	}
+	if app.activeTab == 2 {
+		var command tea.Cmd
+		app.compose, command = app.compose.Activate()
 		app.resizeActivePage()
 		return app, command
 	}
@@ -308,6 +337,8 @@ func (app *App) resizeActivePage() {
 		app.dashboard = app.dashboard.SetSize(app.width, max(app.height-frameRows, 0))
 	} else if app.activeTab == 1 {
 		app.containers = app.containers.SetSize(app.width, max(app.height-frameRows, 0))
+	} else if app.activeTab == 2 {
+		app.compose = app.compose.SetSize(app.width, max(app.height-frameRows, 0))
 	} else if app.activeTab == 3 {
 		app.images = app.images.SetSize(app.width, max(app.height-frameRows, 0))
 	} else if app.activeTab == 4 {
@@ -342,6 +373,8 @@ func (app *App) render() string {
 	pageHelp := ""
 	if app.activeTab == 1 {
 		pageHelp = app.containers.Help()
+	} else if app.activeTab == 2 {
+		pageHelp = app.compose.Help()
 	} else if app.activeTab == 3 {
 		pageHelp = app.images.Help()
 	} else if app.activeTab == 4 {
@@ -381,6 +414,9 @@ func (app *App) pageActivity() string {
 	if app.activeTab == 1 {
 		return app.containers.Activity()
 	}
+	if app.activeTab == 2 {
+		return app.compose.Activity()
+	}
 	if app.activeTab == 3 {
 		return app.images.Activity()
 	}
@@ -405,6 +441,9 @@ func (app *App) pageContent() string {
 	}
 	if app.activeTab == 1 {
 		return app.containers.View()
+	}
+	if app.activeTab == 2 {
+		return app.compose.View()
 	}
 	if app.activeTab == 3 {
 		return app.images.View()
@@ -434,6 +473,9 @@ func (app *App) pageStatus() string {
 	}
 	if app.activeTab == 1 {
 		return app.containers.Status()
+	}
+	if app.activeTab == 2 {
+		return app.compose.Status()
 	}
 	if app.activeTab == 3 {
 		return app.images.Status()
@@ -471,6 +513,7 @@ func (app *App) helpView() string {
 func (app *App) deactivateAll() {
 	app.dashboard = app.dashboard.Deactivate()
 	app.containers = app.containers.Deactivate()
+	app.compose = app.compose.Deactivate()
 	app.images = app.images.Deactivate()
 	app.volumes = app.volumes.Deactivate()
 	app.networks = app.networks.Deactivate()

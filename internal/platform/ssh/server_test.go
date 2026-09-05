@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
+	backendcompose "github.com/petar030/ssh-native-docker-tui/internal/backend/compose"
 	backendcontainers "github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 	backendimages "github.com/petar030/ssh-native-docker-tui/internal/backend/images"
 	backendnetworks "github.com/petar030/ssh-native-docker-tui/internal/backend/networks"
@@ -19,6 +20,7 @@ type testBackend struct{}
 
 func (testBackend) RequestRefresh(backend.Page) error  { return nil }
 func (testBackend) Containers() *backendcontainers.API { return nil }
+func (testBackend) Compose() *backendcompose.API       { return nil }
 func (testBackend) Images() *backendimages.API         { return nil }
 func (testBackend) Volumes() *backendvolumes.API       { return nil }
 func (testBackend) Networks() *backendnetworks.API     { return nil }

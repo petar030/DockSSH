@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
+	backendcompose "github.com/petar030/ssh-native-docker-tui/internal/backend/compose"
 	backendcontainers "github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 	backendimages "github.com/petar030/ssh-native-docker-tui/internal/backend/images"
 	backendnetworks "github.com/petar030/ssh-native-docker-tui/internal/backend/networks"
@@ -23,6 +24,7 @@ type appBackend struct {
 
 func (fake *appBackend) RequestRefresh(backend.Page) error  { return nil }
 func (fake *appBackend) Containers() *backendcontainers.API { return nil }
+func (fake *appBackend) Compose() *backendcompose.API       { return nil }
 func (fake *appBackend) Images() *backendimages.API         { return nil }
 func (fake *appBackend) Volumes() *backendvolumes.API       { return nil }
 func (fake *appBackend) Networks() *backendnetworks.API     { return nil }
@@ -97,22 +99,18 @@ func TestRootDirectAndAdjacentNavigationWraps(t *testing.T) {
 	}
 }
 
-func TestRootActivatesImplementedResourceTabsAndLeavesComposePlaceholder(t *testing.T) {
+func TestRootActivatesImplementedResourceTabs(t *testing.T) {
 	app := New(context.Background(), &appBackend{})
 	_ = app.Init()
 	checks := []struct {
 		key    string
 		active func() bool
-	}{{"4", func() bool { return app.images.Active() }}, {"5", func() bool { return app.volumes.Active() }}, {"6", func() bool { return app.networks.Active() }}, {"7", func() bool { return app.events.Active() }}, {"8", func() bool { return app.system.Active() }}}
+	}{{"3", func() bool { return app.compose.Active() }}, {"4", func() bool { return app.images.Active() }}, {"5", func() bool { return app.volumes.Active() }}, {"6", func() bool { return app.networks.Active() }}, {"7", func() bool { return app.events.Active() }}, {"8", func() bool { return app.system.Active() }}}
 	for _, check := range checks {
 		_, _ = app.Update(key(check.key))
 		if !check.active() {
 			t.Fatalf("tab %s did not activate its page model", check.key)
 		}
-	}
-	_, _ = app.Update(key("3"))
-	if app.images.Active() || app.volumes.Active() || app.networks.Active() || app.events.Active() || app.system.Active() {
-		t.Fatal("Compose placeholder left a resource-page subscription active")
 	}
 }
 

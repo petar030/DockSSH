@@ -924,6 +924,17 @@ explicit `ProjectSpec`; every config file must resolve beneath a configured
 `ComposeRoots` directory. Short lifecycle operations use `CommandExecutor`,
 logs are session-owned, and long operations use `JobExecutor`.
 
+The Compose TUI is a page-local MVU model in `internal/tui/compose`. It keeps
+the active-project list and selected details visible together, scrolls long
+lists/details, validates operation forms before submission, and uses centered
+overlays only for input, destructive confirmation and bounded scrollable logs.
+Accepted jobs immediately move to the session-wide job tracker, including a
+job accepted just before its Compose tab is closed. The production command
+accepts repeatable `-compose-root` flags; file-based actions are unavailable
+unless their files resolve beneath one of those explicit roots. Job handles
+and their history remain session-local and cannot be reattached after the SSH
+session disconnects, although the backend-owned job itself continues.
+
 #### Compose Slice 3.5: configuration editor and creator
 
 Immediately after the initial Compose page is implemented, a separate Slice

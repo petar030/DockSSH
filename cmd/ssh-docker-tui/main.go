@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -33,6 +34,15 @@ func run() error {
 	hostKeyPath := flag.String("host-key", sshplatform.DefaultHostKeyPath, "persistent SSH server host-key path")
 	dockerEndpoint := flag.String("docker-host", "", "optional Docker daemon endpoint; defaults to Docker environment settings")
 	dashboardRefresh := flag.Duration("dashboard-refresh", 10*time.Second, "periodic Dashboard base refresh; 0 disables it")
+	var composeRoots []string
+	flag.Func("compose-root", "allowed directory for Compose files; may be repeated", func(value string) error {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return errors.New("compose-root must not be empty")
+		}
+		composeRoots = append(composeRoots, value)
+		return nil
+	})
 	flag.Parse()
 
 	if *dashboardRefresh < 0 {
@@ -49,7 +59,7 @@ func run() error {
 		})
 	}
 	application, err := dockerplatform.NewBackend(processCtx, dockerplatform.BackendConfig{
-		Endpoint: *dockerEndpoint, RefreshPolicies: policies,
+		Endpoint: *dockerEndpoint, RefreshPolicies: policies, ComposeRoots: composeRoots,
 	})
 	if err != nil {
 		return err
