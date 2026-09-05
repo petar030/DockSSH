@@ -51,7 +51,15 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		if x.err != nil {
+			if x.subscription != nil && x.subscription != m.subscription {
+				_ = x.subscription.Close()
+			}
 			m.loading, m.stale, m.err = false, m.hasData, x.err
+			// A failed filter handover leaves the previous subscription usable.
+			// Restore its generation so its already outstanding receive continues.
+			if x.replacement && m.subscription != nil && m.subscriptionGen > 0 {
+				m.subscriptionGen--
+			}
 			return m, nil
 		}
 		old := m.subscription

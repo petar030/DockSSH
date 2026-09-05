@@ -12,12 +12,14 @@ import (
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 	backendimages "github.com/petar030/ssh-native-docker-tui/internal/backend/images"
 	backendnetworks "github.com/petar030/ssh-native-docker-tui/internal/backend/networks"
+	backendsystem "github.com/petar030/ssh-native-docker-tui/internal/backend/system"
 	backendvolumes "github.com/petar030/ssh-native-docker-tui/internal/backend/volumes"
 	containerstui "github.com/petar030/ssh-native-docker-tui/internal/tui/containers"
 	"github.com/petar030/ssh-native-docker-tui/internal/tui/dashboard"
 	eventstui "github.com/petar030/ssh-native-docker-tui/internal/tui/events"
 	imagestui "github.com/petar030/ssh-native-docker-tui/internal/tui/images"
 	networkstui "github.com/petar030/ssh-native-docker-tui/internal/tui/networks"
+	systemtui "github.com/petar030/ssh-native-docker-tui/internal/tui/system"
 	"github.com/petar030/ssh-native-docker-tui/internal/tui/ui"
 	volumestui "github.com/petar030/ssh-native-docker-tui/internal/tui/volumes"
 )
@@ -38,6 +40,7 @@ type App struct {
 	volumes    volumestui.Model
 	networks   networkstui.Model
 	events     eventstui.Model
+	system     systemtui.Model
 	jobs       *jobTracker
 }
 
@@ -47,6 +50,7 @@ type Application interface {
 	Images() *backendimages.API
 	Volumes() *backendvolumes.API
 	Networks() *backendnetworks.API
+	System() *backendsystem.API
 }
 
 func New(sessionCtx context.Context, application Application) *App {
@@ -58,6 +62,7 @@ func New(sessionCtx context.Context, application Application) *App {
 		volumes:    volumestui.New(sessionCtx, application, application.Volumes()),
 		networks:   networkstui.New(sessionCtx, application, application.Networks()),
 		events:     eventstui.New(sessionCtx, application),
+		system:     systemtui.New(sessionCtx, application, application.System()),
 		jobs:       jobs,
 	}
 }
@@ -109,6 +114,11 @@ func (app *App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			app.events = updated
 			return app, command
 		}
+		if app.activeTab == 7 && app.system.CapturesInput() {
+			updated, command := app.system.Update(message)
+			app.system = updated
+			return app, command
+		}
 		key := message.String()
 		switch key {
 		case "q":
@@ -153,6 +163,11 @@ func (app *App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				app.events, command = app.events.Refresh()
 				return app, command
 			}
+			if app.activeTab == 7 {
+				var command tea.Cmd
+				app.system, command = app.system.Refresh()
+				return app, command
+			}
 		}
 		if index, ok := tabFromKey(key); ok {
 			return app.switchTab(index)
@@ -190,6 +205,11 @@ func (app *App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			app.events = updated
 			return app, command
 		}
+		if app.activeTab == 7 {
+			updated, command := app.system.Update(message)
+			app.system = updated
+			return app, command
+		}
 		return app, nil
 	}
 
@@ -203,9 +223,10 @@ func (app *App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	updatedVolumes, volumesCommand := app.volumes.Update(message)
 	updatedNetworks, networksCommand := app.networks.Update(message)
 	updatedEvents, eventsCommand := app.events.Update(message)
+	updatedSystem, systemCommand := app.system.Update(message)
 	jobsCommand := app.jobs.Update(message)
-	app.dashboard, app.containers, app.images, app.volumes, app.networks, app.events = updatedDashboard, updatedContainers, updatedImages, updatedVolumes, updatedNetworks, updatedEvents
-	return app, tea.Batch(dashboardCommand, containersCommand, imagesCommand, volumesCommand, networksCommand, eventsCommand, jobsCommand)
+	app.dashboard, app.containers, app.images, app.volumes, app.networks, app.events, app.system = updatedDashboard, updatedContainers, updatedImages, updatedVolumes, updatedNetworks, updatedEvents, updatedSystem
+	return app, tea.Batch(dashboardCommand, containersCommand, imagesCommand, volumesCommand, networksCommand, eventsCommand, systemCommand, jobsCommand)
 }
 
 func (app *App) View() tea.View {
@@ -232,6 +253,8 @@ func (app *App) switchTab(index int) (tea.Model, tea.Cmd) {
 		app.networks = app.networks.Deactivate()
 	} else if app.activeTab == 6 {
 		app.events = app.events.Deactivate()
+	} else if app.activeTab == 7 {
+		app.system = app.system.Deactivate()
 	}
 	app.activeTab = index
 	app.showHelp = false
@@ -271,6 +294,12 @@ func (app *App) switchTab(index int) (tea.Model, tea.Cmd) {
 		app.resizeActivePage()
 		return app, command
 	}
+	if app.activeTab == 7 {
+		var command tea.Cmd
+		app.system, command = app.system.Activate()
+		app.resizeActivePage()
+		return app, command
+	}
 	return app, nil
 }
 
@@ -287,6 +316,8 @@ func (app *App) resizeActivePage() {
 		app.networks = app.networks.SetSize(app.width, max(app.height-frameRows, 0))
 	} else if app.activeTab == 6 {
 		app.events = app.events.SetSize(app.width, max(app.height-frameRows, 0))
+	} else if app.activeTab == 7 {
+		app.system = app.system.SetSize(app.width, max(app.height-frameRows, 0))
 	}
 }
 
@@ -319,6 +350,8 @@ func (app *App) render() string {
 		pageHelp = app.networks.Help()
 	} else if app.activeTab == 6 {
 		pageHelp = app.events.Help()
+	} else if app.activeTab == 7 {
+		pageHelp = app.system.Help()
 	}
 	globalHelp := "[ / ] switch tab   1-8 open page   r refresh   ? help   q quit"
 	if app.showHelp {
@@ -357,6 +390,9 @@ func (app *App) pageActivity() string {
 	if app.activeTab == 6 {
 		return app.events.Activity()
 	}
+	if app.activeTab == 7 {
+		return app.system.Activity()
+	}
 	return ""
 }
 
@@ -378,6 +414,9 @@ func (app *App) pageContent() string {
 	}
 	if app.activeTab == 6 {
 		return app.events.View()
+	}
+	if app.activeTab == 7 {
+		return app.system.View()
 	}
 	item := tabs[app.activeTab]
 	return lipgloss.NewStyle().Padding(2, 3).Render(fmt.Sprintf(
@@ -405,6 +444,9 @@ func (app *App) pageStatus() string {
 	if app.activeTab == 6 {
 		return app.events.Status()
 	}
+	if app.activeTab == 7 {
+		return app.system.Status()
+	}
 	return tabs[app.activeTab].label + " is not implemented yet"
 }
 
@@ -430,6 +472,7 @@ func (app *App) deactivateAll() {
 	app.volumes = app.volumes.Deactivate()
 	app.networks = app.networks.Deactivate()
 	app.events = app.events.Deactivate()
+	app.system = app.system.Deactivate()
 }
 
 func (app *App) jobHelp(global string) string {

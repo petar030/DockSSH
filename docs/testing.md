@@ -235,6 +235,12 @@ replace the subscription and reconcile recent history, and `c` clears only the
 current SSH session while live delivery continues. A second session may keep a
 different filter and displayed history without interference.
 
+For System QA, use tab `8` to verify Engine/host facts, aggregate disk usage,
+and the `i`-cycled item lists. Scoped prune forms may be tested only with the
+current run's labeled disposable fixtures. Never exercise broad system prune on
+a shared developer daemon; it requires both backend opt-in and the exact
+confirmation token. A policy denial must remain a clear unavailable state.
+
 ## Docker configuration
 
 The integration fixture follows normal Docker client configuration by default.

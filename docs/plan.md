@@ -535,7 +535,9 @@ details remain visible on the right. Selection immediately
 requests its keyed details; opening a separate details screen is not required.
 Logs, stats and similar focused data replace the right-hand details panel rather
 than replacing the whole page. Between 80 and 119 columns the same regions stack
-vertically, keeping the list and selected information visible. Dashboard cards use three
+vertically, keeping the list and selected information visible. Centered overlays
+are also used for focused container logs and the root session-job tracker.
+Dashboard cards use three
 columns when space permits and two columns at narrower supported sizes. Only text
 entry and destructive confirmation use bounded overlays.
 
@@ -551,6 +553,7 @@ implementations:
 | `esc` | Return a focused right panel to details, or cancel the current modal |
 | `f` | Focus the current page's find/filter input |
 | `r` | Request the active page's authoritative refresh |
+| `J` | Open the root tracker for jobs started by this SSH session |
 | `?` | Toggle contextual help |
 | `q` | Quit from normal navigation mode |
 | `ctrl+c` | End the TUI session from any mode |
@@ -572,8 +575,8 @@ destructive commands still require confirmation.
   loopback.
 - The initial responsive layout, 80x24 minimum and provisional key map are
   defined above and may be refined during page implementation.
-- Container and image inspect environment entries show both names and values.
-  Optional masking or reveal controls can be considered later.
+- Container inspect environment entries show names and values. Image inspect
+  entries show names but mask values in v1.
 - The Events page has no pause action and no paused-event buffer. It continually
   consumes live events while active; clear remains session-local.
 - Locally initiated jobs appear in a compact global footer summary. Selecting

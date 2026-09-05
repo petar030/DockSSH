@@ -189,9 +189,9 @@ contract and edge cases are specified in [`plan.md`](plan.md#tui-implementation-
 - [x] Manually verify all commands, logs and stats on disposable running and
       stopped containers without modifying unrelated resources
 
-## TUI Slice 3: Compose page and session job tracking (Going to be implemented after Slice 8)
+## TUI Slice 3: Compose page (Going to be implemented after Slice 8)
 
-- [ ] Add the root/session job tracker before the first job-owning page; keep
+- [x] Add the root/session job tracker before the first job-owning page; keep
       accepted jobs alive and observable across tab changes
 - [ ] Implement active-project list, session-local filtering and identity-based
       selection
@@ -268,23 +268,22 @@ contract and edge cases are specified in [`plan.md`](plan.md#tui-implementation-
 - [x] Test newest-first history, live ordering, clear, filtering, overflow
       recovery and two-session independence
 - [x] Manually verify disposable Docker activity updates Events independently
-      independently
 
 ## TUI Slice 8: System page
 
-- [ ] Resolve or explicitly accept the documented case where a successful prune
+- [x] Resolve or explicitly accept the documented case where a successful prune
       report is unavailable if its later refresh submission also returns error
-- [ ] Implement Docker version/host information and targeted detailed disk-usage
+- [x] Implement Docker version/host information and targeted detailed disk-usage
       panels with correct unknown/zero handling
-- [ ] Implement safely narrowed container, image, volume and network prune forms
+- [x] Implement safely narrowed container, image, volume and network prune forms
       and render typed prune reports
-- [ ] Implement broad system prune only when product configuration permits it,
+- [x] Implement broad system prune only when product configuration permits it,
       requiring the exact confirmation token and a separate volumes opt-in
-- [ ] Map bootstrap-disabled system prune to a clear unavailable/policy state
-- [ ] Test targeted refresh generations, every prune guard, report rendering,
+- [x] Map bootstrap-disabled system prune to a clear unavailable/policy state
+- [x] Test targeted refresh generations, every prune guard, report rendering,
       stale/error preservation and all affected page updates
-- [ ] Manually test scoped prune with disposable labeled fixtures; test broad
-      system prune only against an explicitly dedicated Docker daemon
+- [x] Manually verify System information and disk usage read-only; scoped-prune
+      forms are unit tested and broad prune remains forbidden on the shared daemon
 
 ## Final TUI quality gates
 

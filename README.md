@@ -56,8 +56,8 @@ go run ./cmd/ssh-docker-tui \
   -dashboard-refresh=10s
 ```
 
-Dashboard, Containers, Images, Volumes, Networks, and Events are implemented. The remaining tabs show
-explicit placeholders and will be added page by page. Use `[`/`]` or `1`–`8` to switch
+Dashboard, Containers, Images, Volumes, Networks, Events, and System are
+implemented. Compose remains an explicit placeholder. Use `[`/`]` or `1`–`8` to switch
 tabs, `r` to refresh, `?` for help, and `q` to disconnect. On Containers, use
 the displayed footer shortcuts: `enter` for details, `p` for processes, `l`
 for logs, `s` for stats, `a` for actions, `f` for filtering and `o` for sort.
@@ -73,5 +73,9 @@ an age- or label-scoped prune.
 On Events, use `f` for backend resource/ID/action/project filters, `j`/`k` to
 scroll the bounded newest-first display, and `c` to clear only the current
 session's rows. Live Docker events continue after a clear.
+On System, use `i` to cycle detailed disk-usage lists and `p` to open guarded
+resource-prune forms. Scoped prune always requires a narrowing filter. Broad
+system prune additionally depends on server policy and the exact displayed
+confirmation token.
 
 The executable entry point is `./cmd/ssh-docker-tui`.

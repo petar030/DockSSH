@@ -12,6 +12,7 @@ import (
 	backendcontainers "github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
 	backendimages "github.com/petar030/ssh-native-docker-tui/internal/backend/images"
 	backendnetworks "github.com/petar030/ssh-native-docker-tui/internal/backend/networks"
+	backendsystem "github.com/petar030/ssh-native-docker-tui/internal/backend/system"
 	backendvolumes "github.com/petar030/ssh-native-docker-tui/internal/backend/volumes"
 )
 
@@ -25,6 +26,7 @@ func (fake *appBackend) Containers() *backendcontainers.API { return nil }
 func (fake *appBackend) Images() *backendimages.API         { return nil }
 func (fake *appBackend) Volumes() *backendvolumes.API       { return nil }
 func (fake *appBackend) Networks() *backendnetworks.API     { return nil }
+func (fake *appBackend) System() *backendsystem.API         { return nil }
 
 func (fake *appBackend) Subscribe(context.Context, backend.Page, backend.EventFilter) (backend.Subscription, error) {
 	fake.mu.Lock()
@@ -92,6 +94,25 @@ func TestRootDirectAndAdjacentNavigationWraps(t *testing.T) {
 	_, _ = app.Update(key("6"))
 	if app.activeTab != 5 {
 		t.Fatalf("direct tab = %d, want 5", app.activeTab)
+	}
+}
+
+func TestRootActivatesImplementedResourceTabsAndLeavesComposePlaceholder(t *testing.T) {
+	app := New(context.Background(), &appBackend{})
+	_ = app.Init()
+	checks := []struct {
+		key    string
+		active func() bool
+	}{{"4", func() bool { return app.images.Active() }}, {"5", func() bool { return app.volumes.Active() }}, {"6", func() bool { return app.networks.Active() }}, {"7", func() bool { return app.events.Active() }}, {"8", func() bool { return app.system.Active() }}}
+	for _, check := range checks {
+		_, _ = app.Update(key(check.key))
+		if !check.active() {
+			t.Fatalf("tab %s did not activate its page model", check.key)
+		}
+	}
+	_, _ = app.Update(key("3"))
+	if app.images.Active() || app.volumes.Active() || app.networks.Active() || app.events.Active() || app.system.Active() {
+		t.Fatal("Compose placeholder left a resource-page subscription active")
 	}
 }
 

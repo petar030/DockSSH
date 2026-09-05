@@ -16,6 +16,7 @@ type fakeBackend struct {
 	filters  []backend.EventFilter
 	requests int
 	subs     []*fakeSub
+	nextErr  error
 }
 
 func (f *fakeBackend) RequestRefresh(p backend.Page) error {
@@ -28,7 +29,9 @@ func (f *fakeBackend) Subscribe(_ context.Context, _ backend.Page, filter backen
 	s := &fakeSub{events: make(chan backend.EventEnvelope, 4)}
 	f.filters = append(f.filters, filter)
 	f.subs = append(f.subs, s)
-	return s, nil
+	err := f.nextErr
+	f.nextErr = nil
+	return s, err
 }
 
 type fakeSub struct {
@@ -99,6 +102,21 @@ func TestFilterReplacementClosesOldThenRefreshes(t *testing.T) {
 	_ = batch[1]()
 	if b.requests != 2 {
 		t.Fatalf("refreshes=%d", b.requests)
+	}
+}
+
+func TestFailedFilterReplacementKeepsOldSubscription(t *testing.T) {
+	b := &fakeBackend{}
+	m := ready(t, b)
+	oldGeneration, old := m.subscriptionGen, b.subs[0]
+	b.nextErr = &backend.AppError{Code: backend.ErrorDaemonUnavailable, Operation: "subscribe"}
+	m.filtering = true
+	m.edits[0] = "container"
+	m, command := m.handleKey(key("enter"))
+	batch := command().(tea.BatchMsg)
+	m, _ = m.Update(batch[0]())
+	if old.closed || m.subscription != old || m.subscriptionGen != oldGeneration {
+		t.Fatal("failed handover discarded the working subscription")
 	}
 }
 

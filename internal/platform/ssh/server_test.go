@@ -9,12 +9,20 @@ import (
 
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
 	backendcontainers "github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
+	backendimages "github.com/petar030/ssh-native-docker-tui/internal/backend/images"
+	backendnetworks "github.com/petar030/ssh-native-docker-tui/internal/backend/networks"
+	backendsystem "github.com/petar030/ssh-native-docker-tui/internal/backend/system"
+	backendvolumes "github.com/petar030/ssh-native-docker-tui/internal/backend/volumes"
 )
 
 type testBackend struct{}
 
 func (testBackend) RequestRefresh(backend.Page) error  { return nil }
 func (testBackend) Containers() *backendcontainers.API { return nil }
+func (testBackend) Images() *backendimages.API         { return nil }
+func (testBackend) Volumes() *backendvolumes.API       { return nil }
+func (testBackend) Networks() *backendnetworks.API     { return nil }
+func (testBackend) System() *backendsystem.API         { return nil }
 func (testBackend) Subscribe(context.Context, backend.Page, backend.EventFilter) (backend.Subscription, error) {
 	return testSubscription{events: make(chan backend.EventEnvelope)}, nil
 }
