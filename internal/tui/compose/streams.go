@@ -3,6 +3,7 @@ package compose
 import (
 	"context"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend"
@@ -15,9 +16,9 @@ type logOpenedMsg struct {
 	stream                backend.Stream[backendcompose.LogEntry]
 	err                   error
 }
-type logValueMsg struct {
+type logBatchMsg struct {
 	generation, streamGen uint64
-	value                 backendcompose.LogEntry
+	values                []backendcompose.LogEntry
 	open                  bool
 }
 type logDoneMsg struct {
@@ -63,13 +64,18 @@ func (m Model) handleLogMessage(message tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		m.logStream = message.stream
-		return m, tea.Batch(waitLogValue(message.stream, m.generation, m.streamGen), waitLogDone(message.stream, m.generation, m.streamGen))
-	case logValueMsg:
-		if !m.currentLog(message.generation, message.streamGen) || !message.open {
+		return m, tea.Batch(waitLogBatch(message.stream, m.generation, m.streamGen), waitLogDone(message.stream, m.generation, m.streamGen))
+	case logBatchMsg:
+		if !m.currentLog(message.generation, message.streamGen) {
 			return m, nil
 		}
-		m.appendLog(message.value)
-		return m, waitLogValue(m.logStream, m.generation, m.streamGen)
+		for _, value := range message.values {
+			m.appendLog(value)
+		}
+		if !message.open {
+			return m, nil
+		}
+		return m, waitLogBatch(m.logStream, m.generation, m.streamGen)
 	case logDoneMsg:
 		if !m.currentLog(message.generation, message.streamGen) {
 			return m, nil
@@ -80,10 +86,27 @@ func (m Model) handleLogMessage(message tea.Msg) (Model, tea.Cmd) {
 	return m, nil
 }
 
-func waitLogValue(stream backend.Stream[backendcompose.LogEntry], generation, streamGen uint64) tea.Cmd {
+func waitLogBatch(stream backend.Stream[backendcompose.LogEntry], generation, streamGen uint64) tea.Cmd {
 	return func() tea.Msg {
 		value, open := <-stream.Values()
-		return logValueMsg{generation: generation, streamGen: streamGen, value: value, open: open}
+		if !open {
+			return logBatchMsg{generation: generation, streamGen: streamGen, open: false}
+		}
+		values := []backendcompose.LogEntry{value}
+		timer := time.NewTimer(40 * time.Millisecond)
+		defer timer.Stop()
+		for len(values) < 256 {
+			select {
+			case value, open = <-stream.Values():
+				if !open {
+					return logBatchMsg{generation: generation, streamGen: streamGen, values: values, open: false}
+				}
+				values = append(values, value)
+			case <-timer.C:
+				return logBatchMsg{generation: generation, streamGen: streamGen, values: values, open: true}
+			}
+		}
+		return logBatchMsg{generation: generation, streamGen: streamGen, values: values, open: true}
 	}
 }
 
@@ -127,9 +150,18 @@ func (m *Model) flushLogFragments() {
 
 func (m *Model) boundLogs() {
 	if excess := len(m.logLines) - maxLogLines; excess > 0 {
+		droppedVisible := excess
+		if filter := strings.ToLower(strings.TrimSpace(m.logFilter)); filter != "" {
+			droppedVisible = 0
+			for _, line := range m.logLines[:excess] {
+				if strings.Contains(strings.ToLower(line), filter) {
+					droppedVisible++
+				}
+			}
+		}
 		m.logLines = append([]string(nil), m.logLines[excess:]...)
 		if !m.logFollowing {
-			m.logScroll = max(m.logScroll-excess, 0)
+			m.logScroll = max(m.logScroll-droppedVisible, 0)
 		}
 	}
 	if m.logFollowing {

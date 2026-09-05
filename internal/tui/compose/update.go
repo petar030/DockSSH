@@ -186,7 +186,7 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 		if m.jobs != nil {
 			return m, m.jobs.Register(message.job, jobName(message.operation))
 		}
-	case logOpenedMsg, logValueMsg, logDoneMsg:
+	case logOpenedMsg, logBatchMsg, logDoneMsg:
 		return m.handleLogMessage(message)
 	case configPathReadyMsg:
 		if !m.currentEditor(message.generation, message.editorGeneration) {

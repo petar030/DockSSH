@@ -57,6 +57,39 @@ func TestLogFilterMatchesRetainedLinesCaseInsensitively(t *testing.T) {
 	}
 }
 
+func TestWaitLogBatchCoalescesBufferedEntries(t *testing.T) {
+	stream := newFakeStream[backendcontainers.LogEntry]()
+	stream.values <- backendcontainers.LogEntry{Data: "one\n"}
+	stream.values <- backendcontainers.LogEntry{Data: "two\n"}
+	stream.values <- backendcontainers.LogEntry{Data: "three\n"}
+	close(stream.values)
+
+	message := waitLogBatch(stream, 4, 7)().(logBatchMsg)
+	if message.generation != 4 || message.streamGen != 7 {
+		t.Fatalf("batch identity = generation %d stream %d", message.generation, message.streamGen)
+	}
+	if message.open {
+		t.Fatal("closed values channel was reported as open")
+	}
+	if len(message.values) != 3 {
+		t.Fatalf("batch length = %d, want 3", len(message.values))
+	}
+}
+
+func TestFilteredScrollOnlyAccountsForMatchingEvictedLines(t *testing.T) {
+	model := Model{logFilter: "keep", scroll: 7}
+	for index := range maxLogLines {
+		model.logLines = append(model.logLines, fmt.Sprintf("keep-%d", index))
+	}
+	model.logLines = append([]string{"discarded", "keep-old"}, model.logLines...)
+
+	model.appendLog(backendcontainers.LogEntry{})
+
+	if model.scroll != 6 {
+		t.Fatalf("filtered scroll = %d, want 6 after one matching retained line was evicted", model.scroll)
+	}
+}
+
 func TestStreamMessagesAndCloseRespectGeneration(t *testing.T) {
 	logs := newFakeStream[backendcontainers.LogEntry]()
 	api := &fakeAPI{logs: logs}
@@ -66,7 +99,7 @@ func TestStreamMessagesAndCloseRespectGeneration(t *testing.T) {
 	opened := command().(logOpenedMsg)
 	model, _ = model.handleStreamMessage(opened)
 	current := model.streamGen
-	model, _ = model.handleStreamMessage(logValueMsg{generation: 2, streamGen: current, open: true, value: backendcontainers.LogEntry{Source: backendcontainers.LogStdout, Data: "ok\n"}})
+	model, _ = model.handleStreamMessage(logBatchMsg{generation: 2, streamGen: current, open: true, values: []backendcontainers.LogEntry{{Source: backendcontainers.LogStdout, Data: "ok\n"}}})
 	if len(model.logLines) != 1 {
 		t.Fatal("current log value was not applied")
 	}
@@ -76,7 +109,7 @@ func TestStreamMessagesAndCloseRespectGeneration(t *testing.T) {
 	default:
 		t.Fatal("stream was not closed")
 	}
-	model, _ = model.handleStreamMessage(logValueMsg{generation: 2, streamGen: current, open: true, value: backendcontainers.LogEntry{Data: "late\n"}})
+	model, _ = model.handleStreamMessage(logBatchMsg{generation: 2, streamGen: current, open: true, values: []backendcontainers.LogEntry{{Data: "late\n"}}})
 	if len(model.logLines) != 1 {
 		t.Fatal("late stream value was applied")
 	}

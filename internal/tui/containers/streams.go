@@ -18,10 +18,10 @@ type logOpenedMsg struct {
 	err        error
 }
 
-type logValueMsg struct {
+type logBatchMsg struct {
 	generation uint64
 	streamGen  uint64
-	value      backendcontainers.LogEntry
+	values     []backendcontainers.LogEntry
 	open       bool
 }
 
@@ -118,17 +118,19 @@ func (model Model) handleStreamMessage(message tea.Msg) (Model, tea.Cmd) {
 			return model, nil
 		}
 		model.logStream = message.stream
-		return model, tea.Batch(waitLogValue(message.stream, model.generation, model.streamGen), waitLogDone(message.stream, model.generation, model.streamGen))
-	case logValueMsg:
+		return model, tea.Batch(waitLogBatch(message.stream, model.generation, model.streamGen), waitLogDone(message.stream, model.generation, model.streamGen))
+	case logBatchMsg:
 		if !model.currentStream(message.generation, message.streamGen, logsView) {
 			return model, nil
+		}
+		for _, value := range message.values {
+			model.appendLog(value)
 		}
 		if !message.open {
 			return model, nil
 		}
-		model.appendLog(message.value)
 		if model.logStream != nil {
-			return model, waitLogValue(model.logStream, model.generation, model.streamGen)
+			return model, waitLogBatch(model.logStream, model.generation, model.streamGen)
 		}
 		return model, nil
 	case logDoneMsg:
@@ -186,10 +188,27 @@ func (model Model) handleStreamMessage(message tea.Msg) (Model, tea.Cmd) {
 	return model, nil
 }
 
-func waitLogValue(stream backend.Stream[backendcontainers.LogEntry], generation, streamGen uint64) tea.Cmd {
+func waitLogBatch(stream backend.Stream[backendcontainers.LogEntry], generation, streamGen uint64) tea.Cmd {
 	return func() tea.Msg {
 		value, open := <-stream.Values()
-		return logValueMsg{generation: generation, streamGen: streamGen, value: value, open: open}
+		if !open {
+			return logBatchMsg{generation: generation, streamGen: streamGen, open: false}
+		}
+		values := []backendcontainers.LogEntry{value}
+		timer := time.NewTimer(40 * time.Millisecond)
+		defer timer.Stop()
+		for len(values) < 256 {
+			select {
+			case value, open = <-stream.Values():
+				if !open {
+					return logBatchMsg{generation: generation, streamGen: streamGen, values: values, open: false}
+				}
+				values = append(values, value)
+			case <-timer.C:
+				return logBatchMsg{generation: generation, streamGen: streamGen, values: values, open: true}
+			}
+		}
+		return logBatchMsg{generation: generation, streamGen: streamGen, values: values, open: true}
 	}
 }
 
@@ -236,9 +255,18 @@ func (model *Model) appendLog(entry backendcontainers.LogEntry) {
 		model.logLines = append(model.logLines, prefix+ui.SanitizeLine(line))
 	}
 	if excess := len(model.logLines) - maxLogLines; excess > 0 {
+		droppedVisible := excess
+		if filter := strings.ToLower(strings.TrimSpace(model.logFilter)); filter != "" {
+			droppedVisible = 0
+			for _, line := range model.logLines[:excess] {
+				if strings.Contains(strings.ToLower(line), filter) {
+					droppedVisible++
+				}
+			}
+		}
 		model.logLines = append([]string(nil), model.logLines[excess:]...)
 		if !model.logFollowing {
-			model.scroll = max(model.scroll-excess, 0)
+			model.scroll = max(model.scroll-droppedVisible, 0)
 		}
 	}
 	if model.logFollowing {

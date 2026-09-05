@@ -169,7 +169,7 @@ func (model Model) Update(message tea.Msg) (Model, tea.Cmd) {
 		// resulting events update the list and details independently.
 		model.notice = ""
 		return model, nil
-	case logOpenedMsg, logValueMsg, logDoneMsg, statsOpenedMsg, statsValueMsg, statsDoneMsg, statsTickMsg:
+	case logOpenedMsg, logBatchMsg, logDoneMsg, statsOpenedMsg, statsValueMsg, statsDoneMsg, statsTickMsg:
 		return model.handleStreamMessage(message)
 	default:
 		if model.loading || model.pendingOperation != "" {
