@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"sync"
 
 	composeapi "github.com/docker/compose/v5/pkg/api"
@@ -49,15 +50,25 @@ type logConsumer struct {
 }
 
 func (consumer *logConsumer) Log(containerName, message string) {
-	consumer.send(LogEntry{Container: containerName, Source: LogStdout, Data: message})
+	consumer.send(LogEntry{Container: containerName, Source: LogStdout, Data: composeLogLine(message)})
 }
 
 func (consumer *logConsumer) Err(containerName, message string) {
-	consumer.send(LogEntry{Container: containerName, Source: LogStderr, Data: message})
+	consumer.send(LogEntry{Container: containerName, Source: LogStderr, Data: composeLogLine(message)})
 }
 
 func (consumer *logConsumer) Status(containerName, message string) {
-	consumer.send(LogEntry{Container: containerName, Source: LogStatus, Data: message})
+	consumer.send(LogEntry{Container: containerName, Source: LogStatus, Data: composeLogLine(message)})
+}
+
+// Compose's LogConsumer receives complete lines with the terminating newline
+// removed. Restore it so downstream stream consumers can use the same
+// chunk/line handling as container logs and display followed output promptly.
+func composeLogLine(message string) string {
+	if strings.HasSuffix(message, "\n") {
+		return message
+	}
+	return message + "\n"
 }
 
 func (consumer *logConsumer) send(entry LogEntry) {

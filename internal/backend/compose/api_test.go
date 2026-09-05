@@ -234,6 +234,16 @@ func TestLogsReturnSessionOwnedTypedStream(t *testing.T) {
 	}
 }
 
+func TestComposeLogConsumerRestoresLineTerminator(t *testing.T) {
+	values := make(chan LogEntry, 1)
+	consumer := &logConsumer{ctx: context.Background(), values: values}
+	consumer.Log("demo-web-1", "hello")
+	entry := <-values
+	if entry.Data != "hello\n" {
+		t.Fatalf("Compose log data = %q, want complete line", entry.Data)
+	}
+}
+
 func TestClosingComposeLogStreamCancelsReaderAndClosesChannels(t *testing.T) {
 	started := make(chan struct{})
 	client := &fakeComposeClient{logsFunc: func(ctx context.Context, _ string, _ composeapi.LogConsumer, _ composeapi.LogOptions) error {
