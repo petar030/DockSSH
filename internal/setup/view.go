@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/petar030/ssh-native-docker-tui/internal/serverconfig"
+	"github.com/petar030/ssh-native-docker-tui/internal/tui/ui"
 )
 
 // colour palette reused from the main TUI.
@@ -123,28 +124,28 @@ func (m Model) viewAuth() string {
 		b.WriteString(styleMuted.Render(serverconfig.PasswordPolicyDescription()) + "\n")
 		b.WriteString(renderPasswordField("Password:        ", strings.Repeat("•", len(m.passwordInput)), !m.passwordCursor) + "\n")
 		b.WriteString(renderPasswordField("Confirm password:", strings.Repeat("•", len(m.passwordConfirm)), m.passwordCursor) + "\n")
-		b.WriteString("\n" + commandLine("Tab", "Switch field") + "\n")
-		b.WriteString(commandLine("Enter", "Confirm") + "\n")
-		b.WriteString(commandLine("Esc", "Cancel") + "\n")
+		b.WriteString("\n" + commandLine(m, "Tab", "Switch field") + "\n")
+		b.WriteString(commandLine(m, "Enter", "Confirm") + "\n")
+		b.WriteString(commandLine(m, "Esc", "Cancel") + "\n")
 
 	case authActionAddKey:
 		b.WriteString(stylePrimary.Render("Paste SSH public key (authorized_keys format):") + "\n")
 		b.WriteString("> " + m.newKeyInput + "█\n")
-		b.WriteString("\n" + commandLine("Enter", "Add key") + "\n")
-		b.WriteString(commandLine("Esc", "Cancel") + "\n")
+		b.WriteString("\n" + commandLine(m, "Enter", "Add key") + "\n")
+		b.WriteString(commandLine(m, "Esc", "Cancel") + "\n")
 
 	case authActionRemoveKey:
 		b.WriteString(stylePrimary.Render("Select key to remove (↑/↓ then Enter):") + "\n")
-		b.WriteString("\n" + commandLine("Enter", "Remove key") + "\n")
-		b.WriteString(commandLine("Esc", "Cancel") + "\n")
+		b.WriteString("\n" + commandLine(m, "Enter", "Remove key") + "\n")
+		b.WriteString(commandLine(m, "Esc", "Cancel") + "\n")
 
 	default:
-		b.WriteString(commandLine("p", "Set/replace password") + "\n")
-		b.WriteString(commandLine("d", "Disable password") + "\n")
-		b.WriteString(commandLine("a", "Add key") + "\n")
-		b.WriteString(commandLine("r", "Remove key") + "\n")
-		b.WriteString(commandLine("Enter", "Continue") + "\n")
-		b.WriteString(commandLine("Esc", "Back") + "\n")
+		b.WriteString(commandLine(m, "p", "Set/replace password") + "\n")
+		b.WriteString(commandLine(m, "d", "Disable password") + "\n")
+		b.WriteString(commandLine(m, "a", "Add key") + "\n")
+		b.WriteString(commandLine(m, "r", "Remove key") + "\n")
+		b.WriteString(commandLine(m, "Enter", "Continue") + "\n")
+		b.WriteString(commandLine(m, "Esc", "Back") + "\n")
 	}
 
 	if m.authError != "" {
@@ -153,8 +154,8 @@ func (m Model) viewAuth() string {
 	return b.String()
 }
 
-func commandLine(key, description string) string {
-	return "  " + stylePrimary.Bold(true).Render(fmt.Sprintf("%-5s", key)) + styleMuted.Render(description)
+func commandLine(m Model, key, description string) string {
+	return "  " + ui.CommandBar(key+" "+description, max(m.width, 80))
 }
 
 // --- Docker screen ---
