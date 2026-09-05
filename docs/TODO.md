@@ -214,18 +214,19 @@ contract and edge cases are specified in [`plan.md`](plan.md#tui-implementation-
 
 ## TUI Slice 4: Images page
 
-- [ ] Implement image list, session-local filters, identity selection, details
+- [x] Implement image list, session-local filters, identity selection, details
       and history panels
-- [ ] Show image environment variable names but always mask their values in v1
-- [ ] Implement tag and remove commands with validation and destructive
+- [x] Show image environment variable names but always mask their values in v1
+- [x] Implement tag and remove commands with validation and destructive
       confirmation
-- [ ] Implement the safely filtered prune editor; never turn its zero value or
+- [x] Implement the safely filtered prune editor; never turn its zero value or
       `dangling=false` into a broad prune
-- [ ] Implement image pull through the session job tracker, including validated
+- [x] Implement image pull through the session job tracker, including validated
       `os/arch[/variant]` platform input and extensible Docker progress statuses
-- [ ] Test keyed-event isolation, unknown/missing image state, prune validation,
+- [x] Test keyed-event isolation, unknown/missing image state, prune validation,
       pull conflict/capacity and image/Dashboard/disk-usage refreshes
-- [ ] Manually verify against fixture images without pruning unrelated images
+- [x] Manually verify read-only behavior against the local daemon; destructive
+      image actions remain explicitly fixture-scoped
 
 ## TUI Slice 5: Volumes page
 

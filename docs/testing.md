@@ -209,6 +209,14 @@ a second SSH session with another filter/selection to verify that UI state is
 session-local while Docker-backed page updates are shared. Confirm the resource
 is removed after the run; never mutate an unrelated existing container.
 
+For Images QA, use tab `4` to verify the image list, local filter/kind/sort,
+ID-based selection, details, masked environment values, and history. Any tag or
+remove must target a disposable fixture tag. Only exercise prune with a unique
+fixture label or `dangling=true`; never submit an unrestricted prune or remove
+an unrelated image. Pull is optional because it uses the registry/network. Open
+a second SSH session to confirm selection and filters are independent while
+authoritative list updates and root job completion remain visible.
+
 ## Docker configuration
 
 The integration fixture follows normal Docker client configuration by default.

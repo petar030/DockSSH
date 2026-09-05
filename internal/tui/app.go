@@ -10,8 +10,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/petar030/ssh-native-docker-tui/internal/backend/containers"
+	backendimages "github.com/petar030/ssh-native-docker-tui/internal/backend/images"
 	containerstui "github.com/petar030/ssh-native-docker-tui/internal/tui/containers"
 	"github.com/petar030/ssh-native-docker-tui/internal/tui/dashboard"
+	imagestui "github.com/petar030/ssh-native-docker-tui/internal/tui/images"
 	"github.com/petar030/ssh-native-docker-tui/internal/tui/ui"
 )
 
@@ -27,17 +29,23 @@ type App struct {
 	showHelp   bool
 	dashboard  dashboard.Model
 	containers containerstui.Model
+	images     imagestui.Model
+	jobs       *jobTracker
 }
 
 type Application interface {
 	dashboard.Backend
 	Containers() *containers.API
+	Images() *backendimages.API
 }
 
 func New(sessionCtx context.Context, application Application) *App {
+	jobs := newJobTracker(sessionCtx)
 	return &App{
 		dashboard:  dashboard.New(sessionCtx, application),
 		containers: containerstui.New(sessionCtx, application, application.Containers()),
+		images:     imagestui.New(sessionCtx, application, application.Images(), jobs),
+		jobs:       jobs,
 	}
 }
 
@@ -57,21 +65,30 @@ func (app *App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		if message.String() == "ctrl+c" {
-			app.dashboard = app.dashboard.Deactivate()
-			app.containers = app.containers.Deactivate()
+			app.deactivateAll()
 			return app, tea.Quit
+		}
+		if app.jobs.CapturesInput() {
+			return app, app.jobs.HandleKey(message.String())
 		}
 		if app.activeTab == 1 && app.containers.CapturesInput() {
 			updated, command := app.containers.Update(message)
 			app.containers = updated
 			return app, command
 		}
+		if app.activeTab == 3 && app.images.CapturesInput() {
+			updated, command := app.images.Update(message)
+			app.images = updated
+			return app, command
+		}
 		key := message.String()
 		switch key {
 		case "q":
-			app.dashboard = app.dashboard.Deactivate()
-			app.containers = app.containers.Deactivate()
+			app.deactivateAll()
 			return app, tea.Quit
+		case "J":
+			app.jobs.Open()
+			return app, nil
 		case "?":
 			app.showHelp = !app.showHelp
 			return app, nil
@@ -86,6 +103,11 @@ func (app *App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			if app.activeTab == 1 {
 				var command tea.Cmd
 				app.containers, command = app.containers.Refresh()
+				return app, command
+			}
+			if app.activeTab == 3 {
+				var command tea.Cmd
+				app.images, command = app.images.Refresh()
 				return app, command
 			}
 		}
@@ -105,6 +127,11 @@ func (app *App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			app.containers = updated
 			return app, command
 		}
+		if app.activeTab == 3 {
+			updated, command := app.images.Update(message)
+			app.images = updated
+			return app, command
+		}
 		return app, nil
 	}
 
@@ -114,8 +141,10 @@ func (app *App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	// the user had already changed tabs.
 	updatedDashboard, dashboardCommand := app.dashboard.Update(message)
 	updatedContainers, containersCommand := app.containers.Update(message)
-	app.dashboard, app.containers = updatedDashboard, updatedContainers
-	return app, tea.Batch(dashboardCommand, containersCommand)
+	updatedImages, imagesCommand := app.images.Update(message)
+	jobsCommand := app.jobs.Update(message)
+	app.dashboard, app.containers, app.images = updatedDashboard, updatedContainers, updatedImages
+	return app, tea.Batch(dashboardCommand, containersCommand, imagesCommand, jobsCommand)
 }
 
 func (app *App) View() tea.View {
@@ -134,6 +163,8 @@ func (app *App) switchTab(index int) (tea.Model, tea.Cmd) {
 		app.dashboard = app.dashboard.Deactivate()
 	} else if app.activeTab == 1 {
 		app.containers = app.containers.Deactivate()
+	} else if app.activeTab == 3 {
+		app.images = app.images.Deactivate()
 	}
 	app.activeTab = index
 	app.showHelp = false
@@ -149,6 +180,12 @@ func (app *App) switchTab(index int) (tea.Model, tea.Cmd) {
 		app.resizeActivePage()
 		return app, command
 	}
+	if app.activeTab == 3 {
+		var command tea.Cmd
+		app.images, command = app.images.Activate()
+		app.resizeActivePage()
+		return app, command
+	}
 	return app, nil
 }
 
@@ -157,6 +194,8 @@ func (app *App) resizeActivePage() {
 		app.dashboard = app.dashboard.SetSize(app.width, max(app.height-frameRows, 0))
 	} else if app.activeTab == 1 {
 		app.containers = app.containers.SetSize(app.width, max(app.height-frameRows, 0))
+	} else if app.activeTab == 3 {
+		app.images = app.images.SetSize(app.width, max(app.height-frameRows, 0))
 	}
 }
 
@@ -181,6 +220,8 @@ func (app *App) render() string {
 	pageHelp := ""
 	if app.activeTab == 1 {
 		pageHelp = app.containers.Help()
+	} else if app.activeTab == 3 {
+		pageHelp = app.images.Help()
 	}
 	globalHelp := "[ / ] switch tab   1-8 open page   r refresh   ? help   q quit"
 	if app.showHelp {
@@ -189,11 +230,15 @@ func (app *App) render() string {
 
 	contentHeight := app.height - frameRows
 	body = lipgloss.NewStyle().Width(app.width).Height(contentHeight).Render(body)
-	return strings.Join([]string{
+	rendered := strings.Join([]string{
 		renderHeader(app.width, app.activeTab, connection, app.pageActivity()),
 		body,
-		renderFooter(app.width, status, pageHelp, globalHelp),
+		renderFooter(app.width, status, pageHelp, app.jobHelp(globalHelp)),
 	}, "\n")
+	if app.jobs.CapturesInput() {
+		return ui.OverlayCentered(rendered, app.jobs.View(app.width), app.width, app.height)
+	}
+	return rendered
 }
 
 func (app *App) pageActivity() string {
@@ -202,6 +247,9 @@ func (app *App) pageActivity() string {
 	}
 	if app.activeTab == 1 {
 		return app.containers.Activity()
+	}
+	if app.activeTab == 3 {
+		return app.images.Activity()
 	}
 	return ""
 }
@@ -212,6 +260,9 @@ func (app *App) pageContent() string {
 	}
 	if app.activeTab == 1 {
 		return app.containers.View()
+	}
+	if app.activeTab == 3 {
+		return app.images.View()
 	}
 	item := tabs[app.activeTab]
 	return lipgloss.NewStyle().Padding(2, 3).Render(fmt.Sprintf(
@@ -227,6 +278,9 @@ func (app *App) pageStatus() string {
 	if app.activeTab == 1 {
 		return app.containers.Status()
 	}
+	if app.activeTab == 3 {
+		return app.images.Status()
+	}
 	return tabs[app.activeTab].label + " is not implemented yet"
 }
 
@@ -237,11 +291,25 @@ func (app *App) helpView() string {
 		"[ / ]        previous / next tab",
 		"1–8          open a tab directly",
 		"r            refresh the active implemented page",
+		"J            show this session's jobs",
 		"?            close this help",
 		"q / ctrl+c   end this SSH TUI session",
 		"",
 		"Page-specific keys will appear as each page is implemented.",
 	}, "\n"))
+}
+
+func (app *App) deactivateAll() {
+	app.dashboard = app.dashboard.Deactivate()
+	app.containers = app.containers.Deactivate()
+	app.images = app.images.Deactivate()
+}
+
+func (app *App) jobHelp(global string) string {
+	if summary := app.jobs.Summary(); summary != "" {
+		return summary + "   " + global
+	}
+	return "J jobs   " + global
 }
 
 var _ tea.Model = (*App)(nil)
