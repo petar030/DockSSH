@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,8 @@ const starterConfig = `services:
   app:
     image: nginx:latest
 `
+
+var yamlLineNumber = regexp.MustCompile(`\bat L(\d+)\b`)
 
 type subscriptionReadyMsg struct {
 	generation   uint64
@@ -650,7 +653,10 @@ func validateEditorConfig(content string) error {
 	}
 	var document map[string]any
 	if err := yaml.Unmarshal([]byte(content), &document); err != nil {
-		return fmt.Errorf("Compose YAML syntax: %w", err)
+		if match := yamlLineNumber.FindStringSubmatch(err.Error()); len(match) == 2 {
+			return fmt.Errorf("Invalid YAML near line %s", match[1])
+		}
+		return errors.New("Invalid Compose YAML syntax")
 	}
 	if err := schema.Validate(document); err != nil {
 		return fmt.Errorf("Compose schema: %w", err)

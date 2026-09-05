@@ -316,7 +316,7 @@ func TestNewConfigEditorValidatesThenSavesWithoutStartingProject(t *testing.T) {
 	invalidContent := m.editor.Value()
 	m, command = m.saveConfig()
 	m, _ = m.Update(firstMessage(command))
-	if api.saved.ProjectName != "" || m.overlay != configEditorOverlay || m.editor.Value() != invalidContent || !strings.Contains(m.notice, "syntax") {
+	if api.saved.ProjectName != "" || m.overlay != configEditorOverlay || m.editor.Value() != invalidContent || !strings.Contains(m.notice, "Invalid YAML") {
 		t.Fatalf("invalid save reached API or lost editor: saved=%+v notice=%q", api.saved, m.notice)
 	}
 
