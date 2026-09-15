@@ -223,6 +223,9 @@ func (model Model) handleEvent(event backend.EventEnvelope) (Model, tea.Cmd) {
 
 func (model Model) handleKey(message tea.KeyPressMsg) (Model, tea.Cmd) {
 	key := message.String()
+	if model.overlay == processesOverlay {
+		return model.handleProcessesOverlayKey(message)
+	}
 	if model.overlay == logsOverlay {
 		if model.logFiltering {
 			switch key {
@@ -313,7 +316,9 @@ func (model Model) handleKey(message tea.KeyPressMsg) (Model, tea.Cmd) {
 		if model.selectedID != "" {
 			model = model.closeStream()
 			model.mode = processesView
-			model.scroll = 0
+			model.overlay = processesOverlay
+			model.processScroll = 0
+			model.processFilter, model.processFilterEdit, model.processFiltering = "", "", false
 			model.selectionGen++
 			model.processState = panelState{loading: true}
 			return model, requestTarget(model.api, model.generation, model.selectionGen, backend.RefreshKey{Kind: backendcontainers.RefreshKindProcesses, ID: model.selectedID})
@@ -343,6 +348,48 @@ func (model Model) handleKey(message tea.KeyPressMsg) (Model, tea.Cmd) {
 		return model.chooseAction(commandRename)
 	case "d":
 		return model.chooseAction(commandRemove)
+	}
+	return model, nil
+}
+
+func (model Model) handleProcessesOverlayKey(message tea.KeyPressMsg) (Model, tea.Cmd) {
+	key := message.String()
+	if model.processFiltering {
+		switch key {
+		case "esc":
+			model.processFiltering = false
+		case "enter":
+			model.processFilter = strings.TrimSpace(model.processFilterEdit)
+			model.processFiltering = false
+			model.processScroll = 0
+		case "backspace":
+			model.processFilterEdit = trimLastRune(model.processFilterEdit)
+		default:
+			if text := message.Key().Text; text != "" {
+				model.processFilterEdit += text
+			}
+		}
+		return model, nil
+	}
+
+	switch key {
+	case "f":
+		model.processFilterEdit, model.processFiltering = model.processFilter, true
+	case "up", "k":
+		model.scrollProcesses(-1)
+	case "down", "j":
+		model.scrollProcesses(1)
+	case "pgup":
+		model.scrollProcesses(-model.processViewportRows())
+	case "pgdown":
+		model.scrollProcesses(model.processViewportRows())
+	case "g":
+		model.processScroll = 0
+	case "G":
+		model.processScroll = model.processMaxScroll()
+	case "esc", "P":
+		model.mode = detailsView
+		model.overlay = noOverlay
 	}
 	return model, nil
 }

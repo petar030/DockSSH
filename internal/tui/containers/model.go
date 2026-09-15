@@ -61,6 +61,7 @@ const (
 	confirmOverlay
 	progressOverlay
 	logsOverlay
+	processesOverlay
 )
 
 type sortMode uint8
@@ -113,11 +114,15 @@ type Model struct {
 	force      bool
 	volumes    bool
 
-	details      backendcontainers.Details
-	detailsID    string
-	detailsState panelState
-	processes    backendcontainers.ProcessesUpdated
-	processState panelState
+	details           backendcontainers.Details
+	detailsID         string
+	detailsState      panelState
+	processes         backendcontainers.ProcessesUpdated
+	processState      panelState
+	processScroll     int
+	processFilter     string
+	processFilterEdit string
+	processFiltering  bool
 
 	pendingOperation string
 	notice           string
@@ -214,6 +219,12 @@ func (model Model) Help() string {
 			return "type filter │ enter apply │ esc cancel"
 		}
 		return "j/k Scroll │ f Filter │ PgUp/PgDn Page │ g/G Top/bottom │ esc Close logs"
+	}
+	if model.overlay == processesOverlay {
+		if model.processFiltering {
+			return "type filter │ enter apply │ esc cancel"
+		}
+		return "j/k Scroll │ f Filter │ PgUp/PgDn Page │ g/G Top/bottom │ esc Close processes"
 	}
 	if model.overlay == confirmOverlay {
 		return "y Confirm │ n Cancel"

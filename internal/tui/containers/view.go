@@ -12,10 +12,9 @@ import (
 
 func (model Model) View() string {
 	page := model
-	if model.overlay == logsOverlay {
+	if model.overlay == logsOverlay || model.overlay == processesOverlay {
 		page.mode = detailsView
 	}
-	fullWidth := max(page.width, 1)
 	var content string
 	if !page.hasData {
 		content = page.spinner.View() + " Loading containers…"
@@ -24,23 +23,15 @@ func (model Model) View() string {
 		}
 		content = lipgloss.NewStyle().Padding(2, 3).Render(content)
 	} else if page.width >= 110 {
-		if page.mode == processesView {
-			content = page.processesPanel(fullWidth)
-		} else {
-			left := page.listPanel(max(page.width*2/3, 70), page.height)
-			rightWidth := max(page.width-lipgloss.Width(left)-1, 36)
-			right := page.secondaryPanel(rightWidth)
-			content = lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
-		}
+		left := page.listPanel(max(page.width*2/3, 70), page.height)
+		rightWidth := max(page.width-lipgloss.Width(left)-1, 36)
+		right := page.secondaryPanel(rightWidth)
+		content = lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 	} else {
-		if page.mode == processesView {
-			content = page.processesPanel(fullWidth)
-		} else {
-			listHeight := max(page.height/2, 8)
-			list := fitView(page.listPanel(max(page.width, 1), listHeight), page.width, listHeight)
-			secondary := page.secondaryPanel(max(page.width, 1))
-			content = lipgloss.JoinVertical(lipgloss.Left, list, secondary)
-		}
+		listHeight := max(page.height/2, 8)
+		list := fitView(page.listPanel(max(page.width, 1), listHeight), page.width, listHeight)
+		secondary := page.secondaryPanel(max(page.width, 1))
+		content = lipgloss.JoinVertical(lipgloss.Left, list, secondary)
 	}
 	if model.overlay != noOverlay {
 		content = ui.OverlayCentered(
@@ -291,6 +282,59 @@ func (model Model) logsOverlayView() string {
 	return pagePanel("▤  LOGS — "+safe(model.selectedName()), body, width)
 }
 
+func (model Model) processesOverlayView() string {
+	width := max(min(model.width-10, 140), 40)
+	if model.processState.loading {
+		return pagePanel("▤  PROCESSES — "+safe(model.selectedName()), model.spinner.View()+" Loading processes…", width)
+	}
+	if model.processState.unavailable {
+		return pagePanel("▤  PROCESSES — "+safe(model.selectedName()), "Unavailable for this container state.\nA stopped container has no process table.\n\nesc close", width)
+	}
+	if model.processState.err != nil {
+		return pagePanel("▤  PROCESSES — "+safe(model.selectedName()), ui.ErrorNotice("Unavailable: "+model.processState.err.Error(), max(width-4, 1))+"\n\nesc close", width)
+	}
+
+	rows := model.filteredProcessRows()
+	viewportRows := model.processViewportRows()
+	maximum := max(len(rows)-viewportRows, 0)
+	start := min(max(model.processScroll, 0), maximum)
+	end := min(start+viewportRows, len(rows))
+	visible := append([][]string(nil), rows[start:end]...)
+	lines := make([]string, 0, viewportRows)
+	for _, row := range visible {
+		lines = append(lines, strings.Join(row, "  "))
+	}
+	for len(lines) < viewportRows {
+		lines = append(lines, "")
+	}
+	if len(rows) == 0 {
+		lines[0] = "No process rows match the filter."
+	}
+	position := fmt.Sprintf("%d–%d / %d", min(start+1, len(rows)), end, len(rows))
+	filter := model.processFilter
+	if model.processFiltering {
+		filter = model.processFilterEdit + "_"
+	}
+	headers := strings.Join(model.processes.Titles, "  ")
+	hint := "j/k scroll   f filter   PgUp/PgDn page   g/G top/bottom   esc close"
+	body := "Filter: " + safe(filter) + "\n" + headers + "\n" + strings.Join(lines, "\n") + "\n" + cell(hint, max(width-4-lipgloss.Width(position)-2, 1)) + "  " + position
+	return pagePanel("▤  PROCESSES — "+safe(model.selectedName()), body, width)
+}
+
+func (model Model) filteredProcessRows() [][]string {
+	filter := strings.ToLower(strings.TrimSpace(model.processFilter))
+	if filter == "" {
+		return model.processes.Rows
+	}
+	rows := make([][]string, 0, len(model.processes.Rows))
+	for _, row := range model.processes.Rows {
+		if strings.Contains(strings.ToLower(strings.Join(row, " ")), filter) {
+			rows = append(rows, row)
+		}
+	}
+	return rows
+}
+
 func (model Model) statsPanel(width int) string {
 	if model.statsErr != nil {
 		message := "Stats unavailable: " + safe(model.statsErr.Error())
@@ -338,6 +382,8 @@ func (model Model) overlayView() string {
 		return pagePanel("WORKING", body, max(min(model.width, 66), 1))
 	case logsOverlay:
 		return model.logsOverlayView()
+	case processesOverlay:
+		return model.processesOverlayView()
 	}
 	return ""
 }

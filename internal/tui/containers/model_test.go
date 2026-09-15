@@ -436,20 +436,27 @@ func TestProcessesConflictIsTargetedUnavailable(t *testing.T) {
 	}
 }
 
-func TestProcessesUseFullPageWidth(t *testing.T) {
+func TestProcessesOpenAsScrollableFloatingOverlay(t *testing.T) {
 	model := New(context.Background(), &fakeBackend{}, &fakeAPI{}).SetSize(160, 30)
-	model.active, model.hasData, model.selectedID, model.mode = true, true, "abc", processesView
+	model.active, model.hasData, model.generation, model.pageCtx = true, true, 1, context.Background()
+	model.selectedID = "abc"
 	model.containers = []backendcontainers.Summary{{ID: "abc", Names: []string{"demo"}}}
+	model, command := model.handleKey(keyPress("P"))
+	if command == nil || model.overlay != processesOverlay || model.mode != processesView {
+		t.Fatalf("processes did not open as an overlay: overlay=%d mode=%d command=%v", model.overlay, model.mode, command != nil)
+	}
+	model.processState = panelState{}
 	model.processes = backendcontainers.ProcessesUpdated{
 		ContainerID: "abc",
 		Titles:      []string{"PID", "USER", "COMMAND"},
-		Rows:        [][]string{{"1", "root", "a command long enough to use the full-width process view"}},
+		Rows:        [][]string{{"1", "root", "worker --serve"}, {"2", "root", "helper"}},
 	}
+	model.processFilter = "worker"
 
 	view := model.View()
-	for _, want := range []string{"PROCESSES — demo", "PID  USER  COMMAND", "full-width process view"} {
+	for _, want := range []string{"CONTAINERS", "PROCESSES — demo", "Filter: worker", "PID  USER  COMMAND", "worker --serve", "j/k scroll", "esc close"} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("process view missing %q:\n%s", want, view)
+			t.Fatalf("process overlay missing %q:\n%s", want, view)
 		}
 	}
 }

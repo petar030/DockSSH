@@ -315,6 +315,11 @@ func (model Model) logViewportRows() int {
 	return max(overlayHeight-5, 1)
 }
 
+func (model Model) processViewportRows() int {
+	overlayHeight := max(min(model.height-4, 30), 10)
+	return max(overlayHeight-6, 1)
+}
+
 func (model Model) logMaxScroll() int {
 	return max(len(model.logDisplayLines())-model.logViewportRows(), 0)
 }
@@ -322,4 +327,12 @@ func (model Model) logMaxScroll() int {
 func (model *Model) scrollLogs(delta int) {
 	model.scroll = max(0, min(model.logMaxScroll(), model.scroll+delta))
 	model.logFollowing = model.scroll == model.logMaxScroll()
+}
+
+func (model Model) processMaxScroll() int {
+	return max(len(model.filteredProcessRows())-model.processViewportRows(), 0)
+}
+
+func (model *Model) scrollProcesses(delta int) {
+	model.processScroll = max(0, min(model.processMaxScroll(), model.processScroll+delta))
 }
