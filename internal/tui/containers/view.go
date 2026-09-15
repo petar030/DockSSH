@@ -15,6 +15,7 @@ func (model Model) View() string {
 	if model.overlay == logsOverlay {
 		page.mode = detailsView
 	}
+	fullWidth := max(page.width, 1)
 	var content string
 	if !page.hasData {
 		content = page.spinner.View() + " Loading containers…"
@@ -23,15 +24,23 @@ func (model Model) View() string {
 		}
 		content = lipgloss.NewStyle().Padding(2, 3).Render(content)
 	} else if page.width >= 110 {
-		left := page.listPanel(max(page.width*2/3, 70), page.height)
-		rightWidth := max(page.width-lipgloss.Width(left)-1, 36)
-		right := page.secondaryPanel(rightWidth)
-		content = lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
+		if page.mode == processesView {
+			content = page.processesPanel(fullWidth)
+		} else {
+			left := page.listPanel(max(page.width*2/3, 70), page.height)
+			rightWidth := max(page.width-lipgloss.Width(left)-1, 36)
+			right := page.secondaryPanel(rightWidth)
+			content = lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
+		}
 	} else {
-		listHeight := max(page.height/2, 8)
-		list := fitView(page.listPanel(max(page.width, 1), listHeight), page.width, listHeight)
-		secondary := page.secondaryPanel(max(page.width, 1))
-		content = lipgloss.JoinVertical(lipgloss.Left, list, secondary)
+		if page.mode == processesView {
+			content = page.processesPanel(fullWidth)
+		} else {
+			listHeight := max(page.height/2, 8)
+			list := fitView(page.listPanel(max(page.width, 1), listHeight), page.width, listHeight)
+			secondary := page.secondaryPanel(max(page.width, 1))
+			content = lipgloss.JoinVertical(lipgloss.Left, list, secondary)
+		}
 	}
 	if model.overlay != noOverlay {
 		content = ui.OverlayCentered(
@@ -225,7 +234,7 @@ func (model Model) processesPanel(width int) string {
 	for _, row := range model.processes.Rows {
 		rows = append(rows, strings.Join(row, "  "))
 	}
-	return pagePanel("PROCESSES", model.windowBody(strings.Join(rows, "\n")), width)
+	return pagePanel("PROCESSES — "+safe(model.selectedName()), model.windowBody(strings.Join(rows, "\n")), width)
 }
 
 func (model Model) logsPanel(width int) string {

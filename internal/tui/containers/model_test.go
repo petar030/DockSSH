@@ -436,6 +436,24 @@ func TestProcessesConflictIsTargetedUnavailable(t *testing.T) {
 	}
 }
 
+func TestProcessesUseFullPageWidth(t *testing.T) {
+	model := New(context.Background(), &fakeBackend{}, &fakeAPI{}).SetSize(160, 30)
+	model.active, model.hasData, model.selectedID, model.mode = true, true, "abc", processesView
+	model.containers = []backendcontainers.Summary{{ID: "abc", Names: []string{"demo"}}}
+	model.processes = backendcontainers.ProcessesUpdated{
+		ContainerID: "abc",
+		Titles:      []string{"PID", "USER", "COMMAND"},
+		Rows:        [][]string{{"1", "root", "a command long enough to use the full-width process view"}},
+	}
+
+	view := model.View()
+	for _, want := range []string{"PROCESSES — demo", "PID  USER  COMMAND", "full-width process view"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("process view missing %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestDeactivationClosesSubscriptionAndRejectsLateEvent(t *testing.T) {
 	common := &fakeBackend{}
 	model, command := New(context.Background(), common, &fakeAPI{}).Activate()
