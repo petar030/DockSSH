@@ -144,26 +144,6 @@ Use `[` and `]`, or keys `1`–`8`, to change pages. Press `?` for contextual
 help, `r` to refresh the current page, `J` to open the session job tracker, and
 `q` to disconnect. Page-specific operations are always shown in the footer.
 
-## Architecture
-
-```mermaid
-flowchart LR
-    Client[SSH client] -->|SSH| Session[Wish + Bubble Tea session]
-    Session --> API[Page APIs]
-    API --> Runtime[Refresh, command and job runtime]
-    Runtime --> SDK[Moby client + Compose SDK]
-    SDK --> Engine[Docker Engine]
-    Engine --> Listener[Docker event listener]
-    Listener --> Hub[Event Hub]
-    Runtime --> Hub
-    Hub --> Session
-```
-
-The Go application is a modular monolith. UI state belongs to individual SSH
-sessions; shared runtime components execute Docker work outside session event
-loops. The backend does not maintain a second persistent copy of Docker
-resource state. More detail is available in the
-[backend documentation](docs/backend/README.md).
 
 ## Testing
 
