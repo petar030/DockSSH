@@ -13,7 +13,8 @@ Start with [architecture.md](architecture.md), then use the focused references:
 - [error-handling.md](error-handling.md) — stable error categories and failure delivery.
 - [shutdown-and-lifecycle.md](shutdown-and-lifecycle.md) — ownership and deterministic cleanup.
 
-The permanent project direction remains in [../plan.md](../plan.md), work ordering in [../TODO.md](../TODO.md), and verification commands in [../testing.md](../testing.md).
+Verification commands, integration-test safety rules, and manual QA scenarios
+are documented in [../testing.md](../testing.md).
 
 ## Minimal client flow
 

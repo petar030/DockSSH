@@ -7,7 +7,7 @@ import (
 )
 
 func TestConfigFromEnvCreatesIsolatedRun(t *testing.T) {
-	t.Setenv("BACKEND_TEST_PREFIX", "Thesis Test / Run")
+	t.Setenv("BACKEND_TEST_PREFIX", "Project Test / Run")
 	t.Setenv("BACKEND_TEST_TIMEOUT", "17s")
 	t.Setenv("BACKEND_TEST_DOCKER_HOST", "tcp://127.0.0.1:2375")
 	t.Setenv("BACKEND_TEST_DEDICATED_DAEMON", "true")
@@ -25,7 +25,7 @@ func TestConfigFromEnvCreatesIsolatedRun(t *testing.T) {
 	if first.ResourcePrefix == second.ResourcePrefix {
 		t.Fatalf("run prefixes are not unique: %q", first.ResourcePrefix)
 	}
-	if !strings.HasPrefix(first.ResourcePrefix, "thesis-test-run-") {
+	if !strings.HasPrefix(first.ResourcePrefix, "project-test-run-") {
 		t.Fatalf("prefix was not sanitized: %q", first.ResourcePrefix)
 	}
 	if first.Timeout != 17*time.Second {

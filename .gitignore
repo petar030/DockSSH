@@ -1,6 +1,8 @@
 # Go build and test artifacts
 /bin/
 /dist/
+/ssh-docker-tui
+/ssh-docker-tui-config
 *.out
 *.test
 coverage.*
@@ -20,3 +22,11 @@ coverage.*
 # Local runtime data
 /tmp/
 /.ssh-docker-tui/
+
+# Local agent and editor state
+/.agents/
+/.codex/
+
+# Development scratch space and demo fixtures
+/bridge-output/
+/demo-compose/

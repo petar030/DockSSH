@@ -38,7 +38,7 @@ func (s screen) title() string {
 
 // field indices for the server screen.
 const (
-	fieldAddress  = iota
+	fieldAddress = iota
 	fieldHostKey
 	serverFieldCount
 )

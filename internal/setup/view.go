@@ -68,7 +68,7 @@ func (m Model) renderHeader() string {
 			tabs[i] = styleMuted.Render(label)
 		}
 	}
-	return title + "\n\n" + strings.Join(tabs, styleMuted.Render("│"))
+	return title + "\n\n" + wrapStyled(tabs, styleMuted.Render("│"), m.contentWidth())
 }
 
 // --- Server screen ---
@@ -76,11 +76,11 @@ func (m Model) renderHeader() string {
 func (m Model) viewServer() string {
 	var b strings.Builder
 	b.WriteString(styleBold.Render("Server Settings") + "\n\n")
-	b.WriteString(styleMuted.Render("Controls the SSH listening address and server identity. Leave fields empty for defaults.") + "\n\n")
+	b.WriteString(m.mutedText("Controls the SSH listening address and server identity. Leave fields empty for defaults.") + "\n\n")
 
 	for i, f := range m.serverFields {
 		active := i == m.activeField
-		b.WriteString(renderField(f, active))
+		b.WriteString(renderField(f, active, m.contentWidth()))
 		b.WriteString("\n")
 	}
 
@@ -94,7 +94,7 @@ func (m Model) viewServer() string {
 func (m Model) viewAuth() string {
 	var b strings.Builder
 	b.WriteString(styleBold.Render("Authentication") + "\n\n")
-	b.WriteString(styleMuted.Render("Choose how SSH clients authenticate. Passwords are stored as hashes; keys use public keys.") + "\n\n")
+	b.WriteString(m.mutedText("Choose how SSH clients authenticate. Passwords are stored as hashes; keys use public keys.") + "\n\n")
 
 	// Status
 	if m.working.Auth.HasPasswordAuth() {
@@ -110,7 +110,7 @@ func (m Model) viewAuth() string {
 			if m.authAction == authActionRemoveKey && i == m.removeKeyIndex {
 				prefix = styleDanger.Render("▶ ")
 			}
-			b.WriteString(prefix + styleMuted.Render(fp) + "\n")
+			b.WriteString(wrapStyledText(prefix, styleMuted.Render(fp), m.contentWidth()) + "\n")
 		}
 	} else {
 		b.WriteString(styleMuted.Render("  No authorized keys configured") + "\n")
@@ -121,16 +121,16 @@ func (m Model) viewAuth() string {
 	switch m.authAction {
 	case authActionSetPassword:
 		b.WriteString(stylePrimary.Render("Set password") + "\n")
-		b.WriteString(styleMuted.Render(serverconfig.PasswordPolicyDescription()) + "\n")
-		b.WriteString(renderPasswordField("Password:        ", strings.Repeat("•", len(m.passwordInput)), !m.passwordCursor) + "\n")
-		b.WriteString(renderPasswordField("Confirm password:", strings.Repeat("•", len(m.passwordConfirm)), m.passwordCursor) + "\n")
+		b.WriteString(m.mutedText(serverconfig.PasswordPolicyDescription()) + "\n")
+		b.WriteString(renderPasswordField("Password:        ", strings.Repeat("•", len(m.passwordInput)), !m.passwordCursor, m.contentWidth()) + "\n")
+		b.WriteString(renderPasswordField("Confirm password:", strings.Repeat("•", len(m.passwordConfirm)), m.passwordCursor, m.contentWidth()) + "\n")
 		b.WriteString("\n" + commandLine(m, "Tab", "Switch field") + "\n")
 		b.WriteString(commandLine(m, "Enter", "Confirm") + "\n")
 		b.WriteString(commandLine(m, "Esc", "Cancel") + "\n")
 
 	case authActionAddKey:
-		b.WriteString(stylePrimary.Render("Paste SSH public key (authorized_keys format):") + "\n")
-		b.WriteString("> " + m.newKeyInput + "█\n")
+		b.WriteString(m.primaryText("Paste SSH public key (authorized_keys format):") + "\n")
+		b.WriteString(renderInput("", m.newKeyInput, true, m.contentWidth()) + "\n")
 		b.WriteString("\n" + commandLine(m, "Enter", "Add key") + "\n")
 		b.WriteString(commandLine(m, "Esc", "Cancel") + "\n")
 
@@ -149,17 +149,37 @@ func (m Model) viewAuth() string {
 	}
 
 	if m.authError != "" {
-		b.WriteString("\n" + styleDanger.Render("✕ "+m.authError) + "\n")
+		b.WriteString("\n" + styleDanger.Render(wrapPlain("✕ "+m.authError, m.contentWidth())) + "\n")
 	}
 	return b.String()
 }
 
 func commandLine(m Model, key, description string) string {
-	return "  " + ui.CommandBar(key+" "+description, max(m.width, 80))
+	return "  " + ui.CommandBar(key+" "+description, m.contentWidth())
 }
 
 func commandBar(m Model, value string) string {
-	return ui.CommandBar(value, max(m.width, 80))
+	width := m.contentWidth()
+	items := strings.Split(value, "│")
+	lines := make([]string, 0, len(items))
+	line := ""
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		candidate := item
+		if line != "" {
+			candidate = line + " │ " + item
+		}
+		if line != "" && lipgloss.Width(candidate) > width {
+			lines = append(lines, ui.CommandBar(line, width))
+			line = item
+			continue
+		}
+		line = candidate
+	}
+	if line != "" {
+		lines = append(lines, ui.CommandBar(line, width))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // --- Docker screen ---
@@ -167,8 +187,8 @@ func commandBar(m Model, value string) string {
 func (m Model) viewDocker() string {
 	var b strings.Builder
 	b.WriteString(styleBold.Render("Docker Settings") + "\n\n")
-	b.WriteString(styleMuted.Render("Select the Docker daemon endpoint. Leave empty to use Docker's environment defaults.") + "\n\n")
-	b.WriteString(renderField(m.dockerFields[fieldDockerEndpoint], true))
+	b.WriteString(m.mutedText("Select the Docker daemon endpoint. Leave empty to use Docker's environment defaults.") + "\n\n")
+	b.WriteString(renderField(m.dockerFields[fieldDockerEndpoint], true, m.contentWidth()))
 	b.WriteString("\n\n")
 	b.WriteString(commandBar(m, "Enter Next │ Esc Back"))
 	return b.String()
@@ -179,7 +199,7 @@ func (m Model) viewDocker() string {
 func (m Model) viewCompose() string {
 	var b strings.Builder
 	b.WriteString(styleBold.Render("Compose Roots") + "\n\n")
-	b.WriteString(styleMuted.Render("Allowed folders for Compose files; the first root is the managed-project default.") + "\n\n")
+	b.WriteString(m.mutedText("Allowed folders for Compose files; the first root is the managed-project default.") + "\n\n")
 
 	if len(m.composeRoots) == 0 {
 		b.WriteString(styleWarning.Render("  (no roots configured)") + "\n")
@@ -189,17 +209,17 @@ func (m Model) viewCompose() string {
 		if i == m.composeSelected {
 			prefix = stylePrimary.Render("▶ ")
 		}
-		label := root
+		b.WriteString(wrapStyledText(prefix, root, m.contentWidth()) + "\n")
 		if i == 0 {
-			label += styleMuted.Render("  ← default managed-config root")
+			indent := strings.Repeat(" ", lipgloss.Width(prefix))
+			b.WriteString(wrapStyledText(indent, styleMuted.Render("← default managed-config root"), m.contentWidth()) + "\n")
 		}
-		b.WriteString(prefix + label + "\n")
 	}
 
 	b.WriteString("\n")
-	b.WriteString(stylePrimary.Render("Add root: ") + m.composeInput + "█\n")
+	b.WriteString(renderInput("Add root: ", m.composeInput, true, m.contentWidth()) + "\n")
 	if m.composeError != "" {
-		b.WriteString(styleDanger.Render("✕ "+m.composeError) + "\n")
+		b.WriteString(styleDanger.Render(wrapPlain("✕ "+m.composeError, m.contentWidth())) + "\n")
 	}
 	b.WriteString("\n")
 	b.WriteString(commandBar(m, "Enter Next │ → Next │ Tab Select │ ↑/↓ Reorder │ ctrl+d Remove │ Esc Back"))
@@ -211,43 +231,43 @@ func (m Model) viewCompose() string {
 func (m Model) viewReview() string {
 	var b strings.Builder
 	b.WriteString(styleBold.Render("Review & Save") + "\n\n")
-	b.WriteString(styleMuted.Render("Check the redacted settings, then save them to the private server configuration file.") + "\n\n")
+	b.WriteString(m.mutedText("Check the redacted settings, then save them to the private server configuration file.") + "\n\n")
 
-	b.WriteString(styleBox.Render(m.renderSummary()))
+	b.WriteString(styleBox.Render(m.renderSummary(max(m.contentWidth()-6, 20))))
 	b.WriteString("\n\n")
 
 	if m.saveSuccess {
-		b.WriteString(styleSuccess.Render("✓ Configuration saved to "+m.configPath) + "\n\n")
+		b.WriteString(styleSuccess.Render(wrapPlain("✓ Configuration saved to "+m.configPath, m.contentWidth())) + "\n\n")
 		b.WriteString(commandBar(m, "q Quit │ Esc Back"))
 	} else {
 		if m.saveError != "" {
-			b.WriteString(styleDanger.Render("✕ "+m.saveError) + "\n\n")
+			b.WriteString(styleDanger.Render(wrapPlain("✕ "+m.saveError, m.contentWidth())) + "\n\n")
 		}
 		b.WriteString(commandBar(m, "s Save │ Esc Back │ q Quit without saving"))
 	}
 	return b.String()
 }
 
-func (m Model) renderSummary() string {
+func (m Model) renderSummary(width int) string {
 	var b strings.Builder
 
 	addr := m.working.Server.Address
 	if addr == "" {
-		addr = styleMuted.Render("(default)")
+		addr = "(default)"
 	}
-	b.WriteString("Listen address:  " + addr + "\n")
+	b.WriteString(summaryLine("Listen address:  ", addr, width) + "\n")
 
 	hkp := m.working.Server.HostKeyPath
 	if hkp == "" {
-		hkp = styleMuted.Render("(default)")
+		hkp = "(default)"
 	}
-	b.WriteString("Host-key path:   " + hkp + "\n")
+	b.WriteString(summaryLine("Host-key path:   ", hkp, width) + "\n")
 
 	ep := m.working.Docker.Endpoint
 	if ep == "" {
-		ep = styleMuted.Render("(Docker defaults)")
+		ep = "(Docker defaults)"
 	}
-	b.WriteString("Docker endpoint: " + ep + "\n")
+	b.WriteString(summaryLine("Docker endpoint: ", ep, width) + "\n")
 
 	b.WriteString("\nAuthentication:\n")
 	if m.working.Auth.HasPasswordAuth() {
@@ -259,7 +279,7 @@ func (m Model) renderSummary() string {
 		b.WriteString(fmt.Sprintf("  "+styleSuccess.Render("✓ Authorized keys: %d"), len(m.working.Auth.AuthorizedKeys)) + "\n")
 		for _, key := range m.working.Auth.AuthorizedKeys {
 			fp, _ := serverconfig.KeyFingerprint(key)
-			b.WriteString("      " + styleMuted.Render(fp) + "\n")
+			b.WriteString(wrapStyledText("      ", styleMuted.Render(fp), width) + "\n")
 		}
 	} else {
 		b.WriteString("  " + styleMuted.Render("  Authorized keys: none") + "\n")
@@ -274,47 +294,27 @@ func (m Model) renderSummary() string {
 		if i == 0 {
 			marker = stylePrimary.Render("[1*]")
 		}
-		b.WriteString("  " + marker + " " + root + "\n")
+		b.WriteString(wrapStyledText("  "+marker+" ", root, width) + "\n")
 	}
 	return b.String()
 }
 
 // --- Shared field rendering ---
 
-func renderField(f fieldModel, active bool) string {
+func renderField(f fieldModel, active bool, width int) string {
 	labelStyle := styleMuted
-	valueStyle := lipgloss.NewStyle()
 	if active {
 		labelStyle = stylePrimary
 	}
 
-	label := labelStyle.Render(f.label + ":")
-	runes := []rune(f.value)
-	cursor := f.cursor
-	if cursor > len(runes) {
-		cursor = len(runes)
-	}
-	before := string(runes[:cursor])
-	after := string(runes[cursor:])
-
-	var valueStr string
-	if active {
-		valueStr = valueStyle.Render(before) + stylePrimary.Render("█") + valueStyle.Render(after)
-	} else {
-		valueStr = valueStyle.Render(f.value)
-		if f.value == "" {
-			valueStr = styleMuted.Render("(empty)")
-		}
-	}
-
-	line := "  " + label + " " + valueStr
+	line := "  " + labelStyle.Render(wrapPlain(f.label+":", max(width-2, 1))) + "\n" + renderInput("    ", f.value, active, width)
 	if f.err != "" {
-		line += "  " + styleDanger.Render("✕ "+f.err)
+		line += "\n    " + styleDanger.Render(wrapPlain("✕ "+f.err, max(width-4, 1)))
 	}
 	return line
 }
 
-func renderPasswordField(label, masked string, active bool) string {
+func renderPasswordField(label, masked string, active bool, width int) string {
 	cursor := ""
 	if active {
 		cursor = stylePrimary.Render("█")
@@ -323,5 +323,133 @@ func renderPasswordField(label, masked string, active bool) string {
 	if active {
 		labelStr = stylePrimary.Render(label)
 	}
-	return "  " + labelStr + " " + masked + cursor
+	return wrapStyledText("  "+labelStr+" ", masked+cursor, width)
+}
+
+func (m Model) contentWidth() int {
+	if m.width <= 0 {
+		return 80
+	}
+	return max(m.width, 20)
+}
+
+func (m Model) mutedText(value string) string {
+	return styleMuted.Render(wrapPlain(value, m.contentWidth()))
+}
+
+func (m Model) primaryText(value string) string {
+	return stylePrimary.Render(wrapPlain(value, m.contentWidth()))
+}
+
+func wrapStyled(items []string, separator string, width int) string {
+	lines := make([]string, 0, len(items))
+	line := ""
+	for _, item := range items {
+		candidate := item
+		if line != "" {
+			candidate = line + separator + item
+		}
+		if line != "" && lipgloss.Width(candidate) > width {
+			lines = append(lines, line)
+			line = item
+			continue
+		}
+		line = candidate
+	}
+	if line != "" {
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func wrapStyledText(prefix, value string, width int) string {
+	available := max(width-lipgloss.Width(prefix), 1)
+	lines := strings.Split(wrapPlain(value, available), "\n")
+	for index := range lines {
+		if index == 0 {
+			lines[index] = prefix + lines[index]
+		} else {
+			lines[index] = strings.Repeat(" ", lipgloss.Width(prefix)) + lines[index]
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderInput(prefix, value string, active bool, width int) string {
+	if !active && value == "" {
+		return prefix + styleMuted.Render("(empty)")
+	}
+	if !active {
+		return wrapStyledText(prefix, value, width)
+	}
+	runes := []rune(value)
+	lineWidth := 0
+	var b strings.Builder
+	b.WriteString(prefix)
+	lineWidth = lipgloss.Width(prefix)
+	write := func(value string) {
+		if lineWidth+lipgloss.Width(value) > width && lineWidth > lipgloss.Width(prefix) {
+			b.WriteString("\n" + strings.Repeat(" ", lipgloss.Width(prefix)))
+			lineWidth = lipgloss.Width(prefix)
+		}
+		b.WriteString(value)
+		lineWidth += lipgloss.Width(value)
+	}
+	for _, r := range runes {
+		write(string(r))
+	}
+	write(stylePrimary.Render("█"))
+	return b.String()
+}
+
+func summaryLine(label, value string, width int) string {
+	return wrapStyledText(label, value, width)
+}
+
+func wrapPlain(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	paragraphs := strings.Split(value, "\n")
+	for index, paragraph := range paragraphs {
+		words := strings.Fields(paragraph)
+		if len(words) == 0 {
+			continue
+		}
+		lines := make([]string, 0, len(words))
+		line := ""
+		for _, word := range words {
+			for lipgloss.Width(word) > width {
+				part, rest := splitToWidth(word, width)
+				if line != "" {
+					lines = append(lines, line)
+					line = ""
+				}
+				lines = append(lines, part)
+				word = rest
+			}
+			if line == "" {
+				line = word
+			} else if lipgloss.Width(line)+1+lipgloss.Width(word) <= width {
+				line += " " + word
+			} else {
+				lines = append(lines, line)
+				line = word
+			}
+		}
+		if line != "" {
+			lines = append(lines, line)
+		}
+		paragraphs[index] = strings.Join(lines, "\n")
+	}
+	return strings.Join(paragraphs, "\n")
+}
+
+func splitToWidth(value string, width int) (string, string) {
+	runes := []rune(value)
+	end := 0
+	for end < len(runes) && lipgloss.Width(string(runes[:end+1])) <= width {
+		end++
+	}
+	return string(runes[:end]), string(runes[end:])
 }

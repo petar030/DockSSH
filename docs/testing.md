@@ -184,8 +184,8 @@ identity, resource counts, disk usage and recent Docker-event summary. Then:
 
 1. press `r` and confirm the status reports a manual refresh before a new
    timestamp appears;
-2. use `[`/`]` and `1`–`8` to verify the persistent frame and explicit
-   placeholders for later page slices;
+2. use `[`/`]` and `1`–`8` to verify every resource page and the persistent
+   application frame;
 3. press `?` to open and close help;
 4. resize below and above 80x24 and confirm the resize message recovers;
 5. connect a second SSH client and confirm navigation/help state is independent
@@ -197,8 +197,9 @@ identity, resource counts, disk usage and recent Docker-event summary. Then:
 
 Use `-dashboard-refresh=0` to disable only scheduled Dashboard refreshes, or a
 short interval such as `-dashboard-refresh=2s` when checking the scheduler.
-`-listen` must remain loopback until client authentication is implemented. A
-persistent host key is generated at `.ssh-docker-tui/host_ed25519` by default.
+Non-loopback listeners require password or public-key authentication configured
+with `go run ./cmd/ssh-docker-tui-config`. A persistent host key is generated at
+`.ssh-docker-tui/host_ed25519` by default.
 
 For Compose QA, create a disposable directory and project, then explicitly
 allow only that directory when starting the application:
@@ -319,7 +320,7 @@ Tests never discover cleanup targets by listing arbitrary host resources.
 3. Confirm the new behavior fails for the expected reason.
 4. Implement the smallest page API and runtime wiring.
 5. Run unit, integration, race, repeated concurrency and cleanup checks.
-6. Mark `docs/TODO.md` only when behavior and gates pass.
+6. Record the completed behavior only after all relevant gates pass.
 
 Fake adapters supplement rather than replace real-Docker tests. Real Docker
 does not replace deterministic concurrency, failure and cancellation tests.

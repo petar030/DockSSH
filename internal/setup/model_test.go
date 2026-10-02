@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/petar030/ssh-native-docker-tui/internal/serverconfig"
 )
 
@@ -199,6 +200,23 @@ func TestReviewSummaryIsRedacted(t *testing.T) {
 	}
 }
 
+func TestSetupViewsWrapAtNarrowTerminalWidth(t *testing.T) {
+	cfg := serverconfig.DefaultConfig()
+	cfg.Server.HostKeyPath = "/a/long/path/that/would/otherwise/run/past/the/edge/of/a/narrow/terminal/host_ed25519"
+	cfg.Compose.Roots = []string{"/a/long/path/that/would/otherwise/run/past/the/edge/of/a/narrow/terminal/compose-projects"}
+	m, _ := newTestModel(cfg)
+	m.width = 48
+
+	for _, activeScreen := range []screen{screenServer, screenAuth, screenDocker, screenCompose, screenReview} {
+		m.activeScreen = activeScreen
+		for _, line := range strings.Split(m.View().Content, "\n") {
+			if width := lipgloss.Width(line); width > m.width {
+				t.Fatalf("screen %v rendered %d columns at width %d: %q", activeScreen, width, m.width, line)
+			}
+		}
+	}
+}
+
 func TestSaveCallsStoreOnce(t *testing.T) {
 	m, store := newTestModel(serverconfig.DefaultConfig())
 	m = sendKeys(m, "enter") // → auth
@@ -243,8 +261,8 @@ func TestComposeRootAddAndRemove(t *testing.T) {
 	}
 
 	// Select and remove.
-	m = sendKeys(m, "tab")     // select index 0
-	m = sendKeys(m, "ctrl+d")  // remove
+	m = sendKeys(m, "tab")    // select index 0
+	m = sendKeys(m, "ctrl+d") // remove
 
 	if len(m.composeRoots) != 0 {
 		t.Fatalf("expected 0 roots after removal, got %d", len(m.composeRoots))
@@ -275,7 +293,7 @@ func sendKeys(m Model, keys ...string) Model {
 type keyMsgT struct{ s string }
 
 func (k keyMsgT) String() string { return k.s }
-func (k keyMsgT) Key() tea.Key { return tea.Key{} }
+func (k keyMsgT) Key() tea.Key   { return tea.Key{} }
 
 func navigateToReview(m Model) Model {
 	m = sendKeys(m, "enter") // server → auth
