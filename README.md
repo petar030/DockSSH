@@ -144,6 +144,17 @@ Use `[` and `]`, or keys `1`–`8`, to change pages. Press `?` for contextual
 help, `r` to refresh the current page, `J` to open the session job tracker, and
 `q` to disconnect. Page-specific operations are always shown in the footer.
 
+## Architecture
+
+![DockSSH architecture](docs/screenshots/architecture.png)
+
+DockSSH is a modular monolith. Each SSH connection owns an independent Bubble
+Tea session, while all sessions share the components responsible for reading
+and modifying Docker resources. Page APIs provide the boundary between the TUI
+and those components, and the event hub distributes state changes to interested
+sessions. Docker Engine remains the source of truth; the application retrieves
+current state through the Moby and Docker Compose clients instead of maintaining
+an independent persistent copy.
 
 ## Testing
 
